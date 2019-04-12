@@ -24,11 +24,11 @@
 
 // Misc.
 #include <cmath>
+#include <map>
 
 // UDP Data Structures
-#include "PacketDataStructures.h"
+#include "DataStructures.h"
 
-#define PACKET_BYTES 1289
 #define UDP_PORT 20777
 
 // Wireless router login
@@ -40,9 +40,51 @@ WiFiUDP udp_listener;
 WiFiServer server(80);
 
 // Variables to accomodate packet data
-char incoming_packet[PACKET_BYTES];
-UDPPacket packet;
-UDPPacket packet_old;
+PacketMotionData packet_motion;
+PacketSessionData packet_session;
+PacketLapData packet_lap;
+PacketEventData packet_event;
+PacketParticipantsData packet_participants;
+PacketCarSetupData packet_setups;
+PacketCarTelemetryData packet_telemetry;
+PacketCarStatusData packet_status;
+// Old data
+PacketMotionData packet_motion_old;
+PacketSessionData packet_session_old;
+PacketLapData packet_lap_old;
+PacketEventData packet_event_old;
+PacketParticipantsData packet_participants_old;
+PacketCarSetupData packet_setups_old;
+PacketCarTelemetryData packet_telemetry_old;
+PacketCarStatusData packet_status_old;
+
+int player_id = 0;
+
+enum PACKET_SIZE
+{
+	SIZE_HEADER = 21,
+	SIZE_MOTION = 1341,
+	SIZE_SESSION = 147,
+	SIZE_LAP = 841,
+	SIZE_EVENT = 25,
+	SIZE_PARTICIPANTS = 1082,
+	SIZE_SETUPS = 841,
+	SIZE_TELEMETRY = 1085,
+	SIZE_STATUS = 1061
+};
+
+enum PACKET_TYPE
+{
+	TYPE_MOTION,
+	TYPE_SESSION,
+	TYPE_LAP,
+	TYPE_EVENT,
+	TYPE_PARTICIPANTS,
+	TYPE_SETUPS,
+	TYPE_TELEMETRY,
+	TYPE_STATUS
+};
+
 bool first_packet = true;
 
 
@@ -53,17 +95,9 @@ bool first_packet = true;
 // 320x240 display
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
-// Misc.
-enum MODE
-{
-	IDLE,
-	PRACTICE,
-	QUALI,
-	RACE,
-	SPECTATOR
-};
+String modes[13];
 
-int current_mode = 0;
+String current_mode = "IDLE";
 unsigned long idle_start = 0;
 unsigned long idle_time = 0;
 
@@ -125,16 +159,16 @@ struct QMode
 		for (int i = 0; i < 4; i++)
 		{
 			// TYRE WEAR
-			if (packet_old.m_tyres_wear[i] != packet.m_tyres_wear[i] || first_packet)
-				DisplayTyreWear(i, packet.m_tyres_wear[i], packet_old.m_tyres_wear[i]);
+			if (packet_status_old.m_carStatusData[player_id].m_tyresWear[i] != packet_status.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+				DisplayTyreWear(i, packet_status.m_carStatusData[player_id].m_tyresWear[i], packet_status_old.m_carStatusData[player_id].m_tyresWear[i]);
 
 			// TYRE TEMPS
-			if (packet_old.m_tyres_temperature[i] != packet.m_tyres_temperature[i] || first_packet)
-				DisplayTyreTemps(i, packet.m_tyres_temperature[i], packet_old.m_tyres_temperature[i]);
+			if (packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] != packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+				DisplayTyreTemps(i, packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i]);
 		}
 
-		if (packet_old.m_fuel_mix != packet.m_fuel_mix || first_packet)
-			DisplayFuelMix(packet.m_fuel_mix);
+		if (packet_status_old.m_carStatusData[player_id].m_fuelMix != packet_status.m_carStatusData[player_id].m_fuelMix || first_packet)
+			DisplayFuelMix(packet_status.m_carStatusData[player_id].m_fuelMix);
 	}
 
 private:
@@ -247,43 +281,43 @@ struct RMode
 		for (int i = 0; i < 4; i++)
 		{
 			// TYRE WEAR
-			if (packet_old.m_tyres_wear[i] != packet.m_tyres_wear[i] || first_packet)
-				DisplayTyreWear(i, packet.m_tyres_wear[i], packet_old.m_tyres_wear[i]);
+			if (packet_status_old.m_carStatusData[player_id].m_tyresWear[i] != packet_status.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+				DisplayTyreWear(i, packet_status.m_carStatusData[player_id].m_tyresWear[i], packet_status_old.m_carStatusData[player_id].m_tyresWear[i]);
 
 			// TYRE TEMPS
-			if (packet_old.m_tyres_temperature[i] != packet.m_tyres_temperature[i] || first_packet)
-				DisplayTyreTemps(i, packet.m_tyres_temperature[i], packet_old.m_tyres_temperature[i]);
+			if (packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] != packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+				DisplayTyreTemps(i, packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i]);
 		}
 
 		// CUMULATIVE PLAYER PENALTY TIME
-		if ((int)packet_old.m_car_data[(int)packet_old.m_player_car_index].m_penalties != (int)packet.m_car_data[(int)packet.m_player_car_index].m_penalties || first_packet)
-			DisplayPenalties(packet.m_car_data[(int)packet.m_player_car_index].m_penalties);
+		if (packet_lap_old.m_lapData[player_id].m_penalties != packet_lap.m_lapData[player_id].m_penalties || first_packet)
+			DisplayPenalties(packet_lap.m_lapData[player_id].m_penalties);
 
 		// DRS INDICATOR
-		if (packet_old.m_drs != packet.m_drs || first_packet)
-			DisplayDRS(packet.m_drs);
+		if (packet_telemetry_old.m_carTelemetryData[player_id].m_drs != packet_telemetry.m_carTelemetryData[player_id].m_drs || first_packet)
+			DisplayDRS(packet_telemetry.m_carTelemetryData[player_id].m_drs);
 
 		// FUEL MIX INDICATOR
-		if (packet_old.m_fuel_mix != packet.m_fuel_mix || first_packet)
-			DisplayFuelMix(packet.m_fuel_mix);
+		if (packet_status_old.m_carStatusData[player_id].m_fuelMix != packet_status.m_carStatusData[player_id].m_fuelMix || first_packet)
+			DisplayFuelMix(packet_status.m_carStatusData[player_id].m_fuelMix);
 
 		// LEFT WING DMG
-		if (packet_old.m_front_left_wing_damage != packet.m_front_left_wing_damage || first_packet)
-			DisplayWingDMG(packet.m_front_right_wing_damage, 205);
+		if (packet_status_old.m_carStatusData[player_id].m_frontLeftWingDamage != packet_status.m_carStatusData[player_id].m_frontLeftWingDamage || first_packet)
+			DisplayWingDMG(packet_status.m_carStatusData[player_id].m_frontLeftWingDamage, 205);
 
 		// RIGHT WING DMG
-		if (packet_old.m_front_right_wing_damage != packet.m_front_right_wing_damage || first_packet)
-			DisplayWingDMG(packet.m_front_right_wing_damage, 275);
+		if (packet_status_old.m_carStatusData[player_id].m_frontRightWingDamage != packet_status.m_carStatusData[player_id].m_frontRightWingDamage || first_packet)
+			DisplayWingDMG(packet_status.m_carStatusData[player_id].m_frontRightWingDamage, 275);
 
 		// FUEL INDICATOR
-		if (packet_old.m_car_data[packet_old.m_player_car_index].m_currentLapNum != packet.m_car_data[packet.m_player_car_index].m_currentLapNum && !first_packet)
+		if (packet_lap_old.m_lapData[player_id].m_currentLapNum != packet_lap.m_lapData[player_id].m_currentLapNum && !first_packet)
 		{
-			fuel.InsertFuel(packet.m_fuel_in_tank);
+			fuel.InsertFuel(packet_status.m_carStatusData[player_id].m_fuelInTank);
 			if (fuel.ready)
-				DisplayFuelPrediction(packet.m_total_laps - (int)packet.m_car_data[packet.m_player_car_index].m_currentLapNum);
+				DisplayFuelPrediction(packet_session.m_totalLaps - packet_lap.m_lapData[player_id].m_currentLapNum);
 		}
-		else if (!fuel.ready && packet_old.m_fuel_in_tank != packet.m_fuel_in_tank || first_packet)
-			DisplayFuelRemaining(packet.m_fuel_in_tank);
+		else if (!fuel.ready && packet_status_old.m_carStatusData[player_id].m_fuelInTank != packet_status.m_carStatusData[player_id].m_fuelInTank || first_packet)
+			DisplayFuelRemaining(packet_status.m_carStatusData[player_id].m_fuelInTank);
 	}
 
 	private:
@@ -455,17 +489,17 @@ struct SMode
 
 	void Update()
 	{
-		if (packet.m_spectator_car_index != packet_old.m_spectator_car_index || first_packet)
+		if (packet_session.m_spectatorCarIndex != packet_session_old.m_spectatorCarIndex || first_packet)
 		{
-			index = packet.m_spectator_car_index;
+			index = packet_session.m_spectatorCarIndex;
 			String str_name;
-			str_name += packet.m_car_data[index].m_driverId;
+			str_name += packet_participants.m_participants[index].m_name;
 			WriteCentered(160, 25, str_name, 3);
-			DisplayBestTime(packet.m_car_data[index].m_bestLapTime);
+			DisplayBestTime(packet_lap.m_lapData[index].m_bestLapTime);
 		}
-		if (packet.m_car_data[index].m_bestLapTime != packet_old.m_car_data[index].m_bestLapTime || first_packet)
+		if (packet_lap.m_lapData[index].m_bestLapTime != packet_lap_old.m_lapData[index].m_bestLapTime || first_packet)
 		{
-			DisplayBestTime(packet.m_car_data[index].m_bestLapTime);
+			DisplayBestTime(packet_lap.m_lapData[index].m_bestLapTime);
 		}
 	}
 
@@ -557,6 +591,21 @@ void setup() {
 
 	idle = new IMode();
 	idle->Init();
+
+	// Define modes
+	modes[0] = "IDLE"; // Unknown
+	modes[1] = "PRACTICE";
+	modes[2] = "PRACTICE";
+	modes[3] = "PRACTICE";
+	modes[4] = "PRACTICE";
+	modes[5] = "QUALI";
+	modes[6] = "QUALI";
+	modes[7] = "QUALI";
+	modes[8] = "QUALI";
+	modes[9] = "QUALI";
+	modes[10] = "RACE";
+	modes[11] = "RACE";
+	modes[12] = "IDLE"; // TT
 }
 
 // MAIN LOOP
@@ -571,74 +620,130 @@ void loop() {
 		if (first_packet)
 			ClearScreen();
 
-		// Copy received packet into packet variables
-		udp_listener.read(incoming_packet, PACKET_BYTES);
-		memcpy(&packet_old, &packet, PACKET_BYTES);
-		memcpy(&packet, incoming_packet, PACKET_BYTES);
+		switch (packet_size)
+		{
+		case SIZE_MOTION:
+			char incoming_motion[SIZE_MOTION];
+			udp_listener.read(incoming_motion, SIZE_MOTION);
+			memcpy(&packet_motion_old, &packet_motion, SIZE_MOTION);
+			memcpy(&packet_motion, incoming_motion, SIZE_MOTION);
+			player_id = packet_motion.m_header.m_playerCarIndex;
+			break;
+		case SIZE_SESSION:
+			char incoming_session[SIZE_SESSION];
+			udp_listener.read(incoming_session, SIZE_SESSION);
+			memcpy(&packet_session_old, &packet_session, SIZE_SESSION);
+			memcpy(&packet_session, incoming_session, SIZE_SESSION);
+			break;
+		case SIZE_LAP:
+			char incoming_lap[SIZE_LAP];
+			udp_listener.read(incoming_lap, SIZE_LAP);
+			PacketLapData temp;
+			memcpy(&temp, incoming_lap, SIZE_LAP);
+			if (temp.m_header.m_packetId != 2)
+			{
+				memcpy(&packet_setups_old, &packet_setups, SIZE_SETUPS);
+				memcpy(&packet_setups, incoming_lap, SIZE_SETUPS);
+			}
+			else
+			{
+				memcpy(&packet_lap_old, &packet_lap, SIZE_LAP);
+				packet_lap = temp;
+			}
+			break;
+		case SIZE_EVENT:
+			char incoming_event[SIZE_EVENT];
+			udp_listener.read(incoming_event, SIZE_EVENT);
+			memcpy(&packet_event_old, &packet_event, SIZE_EVENT);
+			memcpy(&packet_event, incoming_event, SIZE_EVENT);
+			break;
+		case SIZE_PARTICIPANTS:
+			char incoming_participant[SIZE_PARTICIPANTS];
+			udp_listener.read(incoming_participant, SIZE_PARTICIPANTS);
+			memcpy(&packet_participants_old, &packet_participants, SIZE_PARTICIPANTS);
+			memcpy(&packet_participants, incoming_participant, SIZE_PARTICIPANTS);
+			break;
+		case SIZE_TELEMETRY:
+			char incoming_telemetry[SIZE_TELEMETRY];
+			udp_listener.read(incoming_telemetry, SIZE_TELEMETRY);
+			memcpy(&packet_telemetry_old, &packet_telemetry, SIZE_TELEMETRY);
+			memcpy(&packet_telemetry, incoming_telemetry, SIZE_TELEMETRY);
+			break;
+		case SIZE_STATUS:
+			char incoming_status[SIZE_STATUS];
+			udp_listener.read(incoming_status, SIZE_STATUS);
+			memcpy(&packet_status_old, &packet_status, SIZE_STATUS);
+			memcpy(&packet_status, incoming_status, SIZE_STATUS);
+			break;
+		default:
+			break;
+		}
 
 		// Notify mode change if session changed
-		if ((int)packet.m_sessionType != current_mode)
+		if (modes[packet_session.m_sessionType] != current_mode)
 		{
-			if (!(packet.m_is_spectating && current_mode == SPECTATOR))
+			if (!(packet_session.m_isSpectating && current_mode == "SPECTATOR"))
 			{
 				// Deallocate memory from previous mode
-				switch (current_mode)
+
+				if (current_mode == "IDLE")
 				{
-				case 0:
 					delete idle;
 					idle = NULL;
-					break;
-				case 1:
+				}
+				else if (current_mode == "PRACTICE")
+				{
 					delete practice;
 					practice = NULL;
-					break;
-				case 2:
+				}
+				else if (current_mode == "QUALI")
+				{
 					delete quali;
 					quali = NULL;
-					break;
-				case 3:
+				}
+				else if (current_mode == "RACE")
+				{
 					delete race;
 					race = NULL;
-					break;
-				case 4:
+				}
+				else if (current_mode == "SPECTATOR")
+				{
 					delete spectator;
 					spectator = NULL;
-					break;
-				default:
-					break;
 				}
 
 				// Change mode
 				first_packet = true;
-				current_mode = packet.m_sessionType;
+				current_mode = modes[packet_session.m_sessionType];
 				ClearScreen();
 
-				if (!packet.m_is_spectating)
+				if (!packet_session.m_isSpectating)
 				{
-					switch (current_mode)
+					if (current_mode == "PRACTICE")
 					{
-					case 1:
 						practice = new PMode();
 						practice->Init();
-						break;
-					case 2:
+					}
+					else if (current_mode == "QUALI")
+					{
 						quali = new QMode();
 						quali->Init();
-						break;
-					case 3:
+					}
+					else if (current_mode == "RACE")
+					{
 						race = new RMode();
 						race->Init();
-						break;
-					default:
-						current_mode = IDLE;
+					}
+					else
+					{
+						current_mode = "IDLE";
 						idle = new IMode();
 						idle->Init();
-						break;
 					}
 				}
 				else
 				{
-					current_mode = SPECTATOR;
+					current_mode = "SPECTATOR";
 					spectator = new SMode();
 					spectator->Init();
 				}
@@ -646,21 +751,20 @@ void loop() {
 		}
 
 		// Execute actions based on mode
-		switch (current_mode)
+		if (current_mode == "PRACTICE")
 		{
-		case PRACTICE:
-			break;
-		case QUALI:
+		}
+		else if (current_mode == "QUALI")
+		{
 			quali->Update();
-			break;
-		case RACE:
+		}
+		else if (current_mode == "RACE")
+		{
 			race->Update();
-			break;
-		case SPECTATOR:
+		}
+		else if (current_mode == "SPECTATOR")
+		{
 			spectator->Update();
-			break;
-		default:
-			break;
 		}
 
 		if (first_packet)
@@ -677,9 +781,9 @@ void loop() {
 		else
 		{
 			idle_time = millis() - idle_start;
-			if (idle_time > 5000 && current_mode != IDLE)
+			if (idle_time > 5000 && current_mode != "IDLE")
 			{
-				current_mode = IDLE;
+				current_mode = "IDLE";
 				idle = new IMode();
 				idle->Init();
 			}
