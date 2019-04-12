@@ -22,5 +22,8 @@
     <ClInclude Include="__vm\.F1TelemetryDevice.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DataStructures.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
