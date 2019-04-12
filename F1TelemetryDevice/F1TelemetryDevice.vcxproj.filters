@@ -16,6 +16,11 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="F1TelemetryDevice.ino" />
+    <None Include="PacketDataStructures.h" />
   </ItemGroup>
- 
+  <ItemGroup>
+    <ClInclude Include="__vm\.F1TelemetryDevice.vsarduino.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>
