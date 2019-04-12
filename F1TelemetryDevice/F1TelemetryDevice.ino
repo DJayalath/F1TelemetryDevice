@@ -59,18 +59,443 @@ enum MODE
 	IDLE,
 	PRACTICE,
 	QUALI,
-	RACE
+	RACE,
+	SPECTATOR
 };
-int current_mode = -1;
+
+int current_mode = 0;
 unsigned long idle_start = 0;
 unsigned long idle_time = 0;
-Fuel fuel;
-String str_tyre[4];
-uint16 str_tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
-String str_penalties;
-String str_fuelmix;
-String str_fueltank;
-String str_wingdmg;
+
+struct IMode
+{
+	void Init()
+	{
+		ClearScreen();
+		tft.fillScreen(ILI9341_DARKCYAN);
+		tft.setTextColor(ILI9341_WHITE);
+		// Notify connect with internal IP
+		WriteCentered(160, 120 - GetTextHeight(3) * 2, "Idle", 3);
+		WriteCentered(160, 120, "Waiting for data from", 2);
+		WriteCentered(160, 120 + GetTextHeight(3) * 2, WiFi.localIP().toString().c_str(), 3);
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+};
+IMode* idle = NULL;
+
+struct PMode
+{
+	void Init()
+	{
+		tft.fillScreen(ILI9341_OLIVE);
+		tft.setTextColor(ILI9341_WHITE);
+		WriteCentered(160, 120, "Practice Mode", 3);
+		delay(3000);
+		ClearScreen();
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+};
+PMode* practice = NULL;
+
+struct QMode
+{
+	int16_t tyre_pos[4][2] = { {0, 145}, {160, 145}, {0, 50}, {160, 50} };
+
+	void Init()
+	{
+		tft.fillScreen(ILI9341_MAGENTA);
+		tft.setTextColor(ILI9341_WHITE);
+		WriteCentered(160, 120, "Quali Mode", 5);
+		delay(3000);
+		ClearScreen();
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+
+		// Draw boxes for each tyre
+		tft.drawFastVLine(0, 50, 240, ILI9341_CYAN);
+		tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
+		tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
+		tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
+		tft.drawFastHLine(0, 240, 320, ILI9341_CYAN);
+		tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
+	}
+
+	void Update()
+	{
+		// Tyre telemetry
+		for (int i = 0; i < 4; i++)
+		{
+			// TYRE WEAR
+			if (packet_old.m_tyres_wear[i] != packet.m_tyres_wear[i] || first_packet)
+				DisplayTyreWear(i, packet.m_tyres_wear[i], packet_old.m_tyres_wear[i]);
+
+			// TYRE TEMPS
+			if (packet_old.m_tyres_temperature[i] != packet.m_tyres_temperature[i] || first_packet)
+				DisplayTyreTemps(i, packet.m_tyres_temperature[i], packet_old.m_tyres_temperature[i]);
+		}
+
+		if (packet_old.m_fuel_mix != packet.m_fuel_mix || first_packet)
+			DisplayFuelMix(packet.m_fuel_mix);
+	}
+
+private:
+
+	void DisplayTyreTemps(int index, int temperature, int temperature_last)
+	{
+		// If digits change, wipe the area first
+		if (temperature >= 100 && temperature_last < 100 ||
+			temperature < 100 && temperature_last >= 100)
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 33 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
+
+		// Build string
+		String str_tyre_temp;
+		str_tyre_temp += temperature;
+		str_tyre_temp += (char)248;
+		str_tyre_temp += "C";
+
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 80, tyre_pos[index][1] + 33, str_tyre_temp, 3);
+	}
+
+	void DisplayTyreWear(int index, int wear, int wear_last)
+	{
+		// Wipe previous
+		if (wear >= 10 && wear_last < 10 ||
+			wear < 10 && wear_last >= 10)
+		tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 66 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
+
+		// Build string
+		String str_tyre_wear;
+		str_tyre_wear += wear;
+		str_tyre_wear += (char)37;
+
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 80, tyre_pos[index][1] + 66, str_tyre_wear, 3);
+	}
+
+	void DisplayFuelMix(int mix)
+	{
+		// Set colour
+		tft.setTextColor(ILI9341_WHITE);
+
+		// Build string
+		String str_mix;
+		switch (mix)
+		{
+		case 0:
+			str_mix = "Lean Fuel";
+			tft.fillRect(0, 0, 320, 49, ILI9341_DARKGREY);
+			break;
+		case 1:
+			str_mix = "Stnd Fuel";
+			tft.fillRect(0, 0, 320, 49, ILI9341_RED);
+			break;
+		case 2:
+			str_mix = "Rich Fuel";
+			tft.fillRect(0, 0, 320, 49, ILI9341_RED);
+			break;
+		case 3:
+			str_mix = "MAX. Fuel";
+			tft.fillRect(0, 0, 320, 49, ILI9341_MAGENTA);
+			break;
+		}
+
+		// Write to display
+		WriteCentered(160, 25, str_mix, 3);
+
+		// Reset text colours
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+};
+QMode* quali = NULL;
+
+struct RMode
+{
+	// Fuel tracker
+	Fuel fuel;
+
+	// Tyre position array (RL, RR, FL, FR)
+	uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
+
+	void Init()
+	{
+		tft.fillScreen(ILI9341_RED);
+		tft.setTextColor(ILI9341_WHITE);
+		WriteCentered(160, 120, "Race Mode", 5);
+		delay(3000);
+		ClearScreen();
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+
+		// Draw boxes for each tyre
+		tft.drawFastVLine(0, 0, 240, ILI9341_CYAN);
+		tft.drawFastVLine(160, 0, 240, ILI9341_CYAN);
+		tft.drawFastVLine(80, 0, 240, ILI9341_CYAN);
+		tft.drawFastHLine(0, 120, 160, ILI9341_CYAN);
+		tft.drawFastHLine(0, 0, 160, ILI9341_CYAN);
+		tft.drawFastHLine(0, 239, 160, ILI9341_CYAN);
+
+		// Draw boxes for wing
+		tft.drawFastHLine(170, 170 - 20, 140, ILI9341_CYAN);
+		tft.drawFastHLine(170, 170 + 20, 140, ILI9341_CYAN);
+		tft.drawFastVLine(170, 170 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(240, 170 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(310, 170 - 20, 40, ILI9341_CYAN);
+	}
+
+	void Update()
+	{
+		// Tyre telemetry
+		for (int i = 0; i < 4; i++)
+		{
+			// TYRE WEAR
+			if (packet_old.m_tyres_wear[i] != packet.m_tyres_wear[i] || first_packet)
+				DisplayTyreWear(i, packet.m_tyres_wear[i], packet_old.m_tyres_wear[i]);
+
+			// TYRE TEMPS
+			if (packet_old.m_tyres_temperature[i] != packet.m_tyres_temperature[i] || first_packet)
+				DisplayTyreTemps(i, packet.m_tyres_temperature[i], packet_old.m_tyres_temperature[i]);
+		}
+
+		// CUMULATIVE PLAYER PENALTY TIME
+		if ((int)packet_old.m_car_data[(int)packet_old.m_player_car_index].m_penalties != (int)packet.m_car_data[(int)packet.m_player_car_index].m_penalties || first_packet)
+			DisplayPenalties(packet.m_car_data[(int)packet.m_player_car_index].m_penalties);
+
+		// DRS INDICATOR
+		if (packet_old.m_drs != packet.m_drs || first_packet)
+			DisplayDRS(packet.m_drs);
+
+		// FUEL MIX INDICATOR
+		if (packet_old.m_fuel_mix != packet.m_fuel_mix || first_packet)
+			DisplayFuelMix(packet.m_fuel_mix);
+
+		// LEFT WING DMG
+		if (packet_old.m_front_left_wing_damage != packet.m_front_left_wing_damage || first_packet)
+			DisplayWingDMG(packet.m_front_right_wing_damage, 205);
+
+		// RIGHT WING DMG
+		if (packet_old.m_front_right_wing_damage != packet.m_front_right_wing_damage || first_packet)
+			DisplayWingDMG(packet.m_front_right_wing_damage, 275);
+
+		// FUEL INDICATOR
+		if (packet_old.m_car_data[packet_old.m_player_car_index].m_currentLapNum != packet.m_car_data[packet.m_player_car_index].m_currentLapNum && !first_packet)
+		{
+			fuel.InsertFuel(packet.m_fuel_in_tank);
+			if (fuel.ready)
+				DisplayFuelPrediction(packet.m_total_laps - (int)packet.m_car_data[packet.m_player_car_index].m_currentLapNum);
+		}
+		else if (!fuel.ready && packet_old.m_fuel_in_tank != packet.m_fuel_in_tank || first_packet)
+			DisplayFuelRemaining(packet.m_fuel_in_tank);
+	}
+
+	private:
+		void DisplayFuelRemaining(float fuel_remaining)
+		{
+			// Round off to 1 decimal place
+			fuel_remaining = floor(fuel_remaining * 10.f) / 10.f;
+			// Build string
+			String str_fuel;
+			str_fuel += fuel_remaining;
+			str_fuel += " kg";
+			// Write to display
+			WriteCentered(240, 120, str_fuel, 2);
+		}
+
+		void DisplayFuelPrediction(float laps_remaining)
+		{
+			// Wipe previous prediction
+			tft.fillRect(161, 120 - GetTextHeight(2) / 2, 158, GetTextHeight(2), ILI9341_BLACK);
+
+			// Get prediction
+			float prediction = fuel.GetDelta(laps_remaining);
+
+			// Build string
+			String str_fuel_prediction;
+			if (prediction > 0)
+			{
+				str_fuel_prediction += "+";
+				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+			}
+			else
+			{
+				str_fuel_prediction += "-";
+				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+				prediction *= -1;
+			}
+			str_fuel_prediction += prediction;
+			str_fuel_prediction += " laps";
+
+			// Write to display
+			WriteCentered(240, 120, str_fuel_prediction, 2);
+
+			// Return to previous colour output
+			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+		}
+
+		void DisplayWingDMG(int dmg, int pos)
+		{
+			// Wipe previous
+			tft.fillRect(pos - 34, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
+
+			// Set colour
+			if (dmg == 0)
+				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+			else if (dmg < 20)
+				tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+			else
+				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+
+			// Build string
+			String str_dmg;
+			str_dmg += dmg;
+			str_dmg += (char)37;
+
+			// Write to display
+			WriteCentered(pos, 170, str_dmg, 2);
+
+			// Return to previous colour output
+			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+		}
+
+		void DisplayFuelMix(int mix)
+		{
+			// Build string
+			String str_mix;
+			switch (mix)
+			{
+			case 0:
+				str_mix = "Lean Fuel";
+				break;
+			case 1:
+				str_mix = "Stnd Fuel";
+				break;
+			case 2:
+				str_mix = "Rich Fuel";
+				break;
+			case 3:
+				str_mix = "MAX. Fuel";
+				break;
+			}
+
+			// Write to display
+			WriteCentered(240, 80, str_mix, 2);
+		}
+
+		void DisplayDRS(int drs_on)
+		{
+			// Select colour
+			if (drs_on)
+				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+			else
+				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+
+			// Write to display
+			WriteCentered(240, GetTextHeight(4), "DRS", 4);
+
+			// Return to previous colour output
+			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+		}
+
+		void DisplayPenalties(int penalty_time)
+		{
+			// Build string
+			String str_penalty = "+ ";
+			str_penalty += penalty_time;
+			str_penalty += "s";
+
+			// Write to display
+			WriteCentered(240, 240 - GetTextHeight(3), str_penalty, 3);
+		}
+
+		void DisplayTyreTemps(int index, int temperature, int temperature_last)
+		{
+			// If digits change, wipe the area first
+			if (temperature >= 100 && temperature_last < 100 ||
+				temperature < 100 && temperature_last >= 100)
+				tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 60, 78, 55, ILI9341_BLACK);
+
+			// Build string
+			String str_tyre_temp;
+			str_tyre_temp += temperature;
+			str_tyre_temp += (char)248;
+			str_tyre_temp += "C";
+
+			// Write to display
+			WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 90, str_tyre_temp, 2);
+		}
+
+		void DisplayTyreWear(int index, int wear, int wear_last)
+		{
+			// Wipe previous
+			if (wear >= 10 && wear_last < 10 || wear < 10 && wear_last >= 10)
+				tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 1, 78, 55, ILI9341_BLACK);
+
+			// Build string
+			String str_tyre_wear;
+			str_tyre_wear += wear;
+			str_tyre_wear += (char)37;
+
+			// Write to display
+			WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 30, str_tyre_wear, 3);
+		}
+};
+RMode* race = NULL;
+
+struct SMode
+{
+	int index;
+
+	void Init()
+	{
+		tft.fillScreen(ILI9341_DARKGREY);
+		tft.setTextColor(ILI9341_WHITE);
+		WriteCentered(160, 120, "Spectator Mode", 3);
+		delay(3000);
+		ClearScreen();
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void Update()
+	{
+		if (packet.m_spectator_car_index != packet_old.m_spectator_car_index || first_packet)
+		{
+			index = packet.m_spectator_car_index;
+			String str_name;
+			str_name += packet.m_car_data[index].m_driverId;
+			WriteCentered(160, 25, str_name, 3);
+			DisplayBestTime(packet.m_car_data[index].m_bestLapTime);
+		}
+		if (packet.m_car_data[index].m_bestLapTime != packet_old.m_car_data[index].m_bestLapTime || first_packet)
+		{
+			DisplayBestTime(packet.m_car_data[index].m_bestLapTime);
+		}
+	}
+
+private:
+
+	void DisplayBestTime(float t)
+	{
+		int minutes = (int)t / 60;
+		int seconds = t - minutes * 60;
+		int millisec = (t - (int)t) * 1000.f;
+		String str_best;
+		str_best += "Best: 0";
+		str_best += minutes;
+		str_best += ":";
+		if (seconds < 10)
+			str_best += (char)48;
+		str_best += seconds;
+		str_best += ":";
+		if (millisec < 10)
+		{
+			str_best += (char)48;
+			str_best += (char)48;
+		}
+		else if (millisec < 100)
+			str_best += (char)48;
+		str_best += millisec;
+		WriteCentered(160, 75, str_best, 2);
+	}
+};
+SMode* spectator = NULL;
 
 // Auxillary Functions
 
@@ -129,6 +554,9 @@ void setup() {
 
 	// Listen for incoming packets
 	udp_listener.begin(UDP_PORT);
+
+	idle = new IMode();
+	idle->Init();
 }
 
 // MAIN LOOP
@@ -149,49 +577,71 @@ void loop() {
 		memcpy(&packet, incoming_packet, PACKET_BYTES);
 
 		// Notify mode change if session changed
-		if (packet.m_sessionType != current_mode)
+		if ((int)packet.m_sessionType != current_mode)
 		{
-			first_packet = true;
-			current_mode = packet.m_sessionType;
-			ClearScreen();
-			switch ((int)packet.m_sessionType)
+			if (!(packet.m_is_spectating && current_mode == SPECTATOR))
 			{
-			case 1:
-				WriteCentered(160, 120, "Practice Mode", 4);
-				delay(5000);
+				// Deallocate memory from previous mode
+				switch (current_mode)
+				{
+				case 0:
+					delete idle;
+					idle = NULL;
+					break;
+				case 1:
+					delete practice;
+					practice = NULL;
+					break;
+				case 2:
+					delete quali;
+					quali = NULL;
+					break;
+				case 3:
+					delete race;
+					race = NULL;
+					break;
+				case 4:
+					delete spectator;
+					spectator = NULL;
+					break;
+				default:
+					break;
+				}
+
+				// Change mode
+				first_packet = true;
+				current_mode = packet.m_sessionType;
 				ClearScreen();
-				break;
-			case 2:
-				tft.fillScreen(ILI9341_MAGENTA);
-				tft.setTextColor(ILI9341_WHITE);
-				WriteCentered(160, 120, "Quali Mode", 5);
-				delay(5000);
-				ClearScreen();
-				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-				break;
-			case 3:
-				tft.fillScreen(ILI9341_RED);
-				tft.setTextColor(ILI9341_WHITE);
-				WriteCentered(160, 120, "Race Mode", 5);
-				delay(5000);
-				ClearScreen();
-				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-				// Draw boxes for each tyre
-				tft.drawFastVLine(0, 0, 240, ILI9341_CYAN);
-				tft.drawFastVLine(160, 0, 240, ILI9341_CYAN);
-				tft.drawFastVLine(80, 0, 240, ILI9341_CYAN);
-				tft.drawFastHLine(0, 120, 160, ILI9341_CYAN);
-				tft.drawFastHLine(0, 0, 160, ILI9341_CYAN);
-				tft.drawFastHLine(0, 239, 160, ILI9341_CYAN);
-				// Draw boxes for wing
-				tft.drawFastHLine(170, 170 - 20, 140, ILI9341_CYAN);
-				tft.drawFastHLine(170, 170 + 20, 140, ILI9341_CYAN);
-				tft.drawFastVLine(170, 170 - 20, 40, ILI9341_CYAN);
-				tft.drawFastVLine(240, 170 - 20, 40, ILI9341_CYAN);
-				tft.drawFastVLine(310, 170 - 20, 40, ILI9341_CYAN);
-				break;
-			default:
-				break;
+
+				if (!packet.m_is_spectating)
+				{
+					switch (current_mode)
+					{
+					case 1:
+						practice = new PMode();
+						practice->Init();
+						break;
+					case 2:
+						quali = new QMode();
+						quali->Init();
+						break;
+					case 3:
+						race = new RMode();
+						race->Init();
+						break;
+					default:
+						current_mode = IDLE;
+						idle = new IMode();
+						idle->Init();
+						break;
+					}
+				}
+				else
+				{
+					current_mode = SPECTATOR;
+					spectator = new SMode();
+					spectator->Init();
+				}
 			}
 		}
 
@@ -201,170 +651,24 @@ void loop() {
 		case PRACTICE:
 			break;
 		case QUALI:
+			quali->Update();
 			break;
 		case RACE:
-			// Tyre telemetry
-			for (int i = 0; i < 4; i++)
-			{
-				// TYRE WEAR
-				if (packet_old.m_tyres_wear[i] != packet.m_tyres_wear[i] || first_packet)
-				{
-					tft.fillRect(str_tyre_pos[i][0] + 1, str_tyre_pos[i][1] + 1, 78, 55, ILI9341_BLACK);
-					str_tyre[i] = "";
-					str_tyre[i] += (int)packet.m_tyres_wear[i];
-					str_tyre[i] += (char)37;
-					WriteCentered(str_tyre_pos[i][0] + 40, str_tyre_pos[i][1] + 30, str_tyre[i].c_str(), 3);
-				}
-				
-				// TYRE TEMPS
-				if (packet_old.m_tyres_temperature[i] != packet.m_tyres_temperature[i] || first_packet)
-				{
-					// If digits change, wipe the area first
-					if (packet_old.m_tyres_temperature[i] >= 100 && packet.m_tyres_temperature[i] < 100 ||
-						packet_old.m_tyres_temperature[i] < 100 && packet.m_tyres_temperature[i] >= 100)
-						tft.fillRect(str_tyre_pos[i][0] + 1, str_tyre_pos[i][1] + 60, 78, 55, ILI9341_BLACK);
-
-					str_tyre[i] = "";
-					str_tyre[i] += (int)packet.m_tyres_temperature[i];
-					str_tyre[i] += (char)248;
-					str_tyre[i].concat('C');
-					WriteCentered(str_tyre_pos[i][0] + 40, str_tyre_pos[i][1] + 90, str_tyre[i].c_str(), 2);
-				}
-			}
-
-			// CUMULATIVE PLAYER PENALTY TIME
-			if ((int)packet_old.m_car_data[(int)packet_old.m_player_car_index].m_penalties !=
-				(int)packet.m_car_data[(int)packet.m_player_car_index].m_penalties || first_packet)
-			{
-				str_penalties = "+ ";
-				str_penalties += (int)packet.m_car_data[(int)packet.m_player_car_index].m_penalties;
-				str_penalties.concat('s');
-				WriteCentered(240, 240 - GetTextHeight(3), str_penalties.c_str(), 3);
-			}
-
-			// DRS INDICATOR
-			if (packet_old.m_drs != packet.m_drs || first_packet)
-			{
-				if ((int)packet.m_drs)
-				{
-					tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-					WriteCentered(240, GetTextHeight(4), "DRS", 4);
-					tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-				}
-				else
-				{
-					tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-					WriteCentered(240, GetTextHeight(4), "DRS", 4);
-					tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-				}
-			}
-
-			// FUEL MIX INDICATOR
-			if (packet_old.m_fuel_mix != packet.m_fuel_mix || first_packet)
-			{
-				switch (packet.m_fuel_mix)
-				{
-				case 0:
-					str_fuelmix = "Lean Fuel";
-					break;
-				case 1:
-					str_fuelmix = "Stnd Fuel";
-					break;
-				case 2:
-					str_fuelmix = "Rich Fuel";
-					break;
-				case 3:
-					str_fuelmix = "MAX. Fuel";
-					break;
-				}
-				WriteCentered(240, 80, str_fuelmix.c_str(), 2);
-			}
-
-			// LEFT WING DMG
-			if (packet_old.m_front_left_wing_damage != packet.m_front_left_wing_damage || first_packet)
-			{
-				tft.fillRect(171, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
-				if (packet.m_front_left_wing_damage == 0)
-					tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-				else if (packet.m_front_left_wing_damage < 20)
-					tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
-				else
-					tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-				
-				str_wingdmg = "";
-				str_wingdmg += (int)packet.m_front_left_wing_damage;
-				str_wingdmg += (char)37;
-				WriteCentered(205, 170, str_wingdmg, 2);
-
-				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-			}
-
-			// RIGHT WING DMG
-			if (packet_old.m_front_right_wing_damage != packet.m_front_right_wing_damage || first_packet)
-			{
-				tft.fillRect(241, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
-				if (packet.m_front_right_wing_damage == 0)
-					tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-				else if (packet.m_front_right_wing_damage < 20)
-					tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
-				else
-					tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-
-				str_wingdmg = "";
-				str_wingdmg += (int)packet.m_front_right_wing_damage;
-				str_wingdmg += (char)37;
-				WriteCentered(275, 170, str_wingdmg, 2);
-
-				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-			}
-
-			// FUEL INDICATOR
-			if (packet_old.m_car_data[packet_old.m_player_car_index].m_currentLapNum != packet.m_car_data[packet.m_player_car_index].m_currentLapNum && !first_packet)
-			{
-				fuel.InsertFuel(packet.m_fuel_in_tank);
-				if (fuel.ready)
-				{
-					tft.fillRect(161, 120 - GetTextHeight(2) / 2, 158, GetTextHeight(2), ILI9341_BLACK);
-					str_fueltank = "";
-					float val = fuel.GetDelta(packet.m_total_laps - (int)packet.m_car_data[packet.m_player_car_index].m_currentLapNum);
-					if (val > 0)
-					{
-						str_fueltank.concat("+");
-						tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-					}
-					else
-					{
-						str_fueltank.concat("-");
-						tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-						val *= -1;
-					}
-					str_fueltank += val;
-					str_fueltank.concat(" laps");
-					
-					WriteCentered(240, 120, str_fueltank.c_str(), 2);
-
-					tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-				}
-			}
-			else if (!fuel.ready && packet_old.m_fuel_in_tank != packet.m_fuel_in_tank || first_packet)
-			{
-				str_fueltank = "";
-				str_fueltank += floor(packet.m_fuel_in_tank * 10.f) / 10.f;
-				str_fueltank.concat(" kg");
-				WriteCentered(240, 120, str_fueltank.c_str(), 2);
-			}
+			race->Update();
+			break;
+		case SPECTATOR:
+			spectator->Update();
 			break;
 		default:
 			break;
 		}
 
 		if (first_packet)
-		{
 			first_packet = false;
-		}
 	}
 	else
 	{
+		// Automatically switch to idle mode if no packets received for > 500ms
 		if (idle_time == 0)
 		{
 			idle_start = millis();
@@ -373,13 +677,11 @@ void loop() {
 		else
 		{
 			idle_time = millis() - idle_start;
-			if (idle_time > 500 && current_mode != IDLE)
+			if (idle_time > 5000 && current_mode != IDLE)
 			{
 				current_mode = IDLE;
-				ClearScreen();
-				// Notify connect with internal IP
-				WriteCentered(160, 120 - GetTextHeight(3), "Idle: waiting for data...", 2);
-				WriteCentered(160, 120 + GetTextHeight(3), WiFi.localIP().toString().c_str(), 3);
+				idle = new IMode();
+				idle->Init();
 			}
 		}
 	}
