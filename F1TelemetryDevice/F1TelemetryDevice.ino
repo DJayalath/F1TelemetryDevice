@@ -27,7 +27,7 @@
 #include <map>
 
 // UDP Data Structures
-#include "DataStructures.h"
+#include "DataStructures.hpp"
 
 #define UDP_PORT 20777
 

@@ -110,12 +110,12 @@
     <None Include="F1TelemetryDevice.ino">
       <FileType>CppCode</FileType>
     </None>
-    <None Include="PacketDataStructures.h">
+    <None Include="PacketDataStructures.hpp">
       <FileType>CppCode</FileType>
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="DataStructures.h" />
+    <ClInclude Include="DataStructures.hpp" />
     <ClInclude Include="__vm\.F1TelemetryDevice.vsarduino.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
