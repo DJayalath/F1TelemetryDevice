@@ -95,9 +95,21 @@ bool first_packet = true;
 // 320x240 display
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
-String modes[13];
+enum MODE
+{
+	IDLE,
+	PRACTICE,
+	QUALI,
+	RACE,
+	SPECTATOR
+};
 
-String current_mode = "IDLE";
+int mode_map[13] = {IDLE, PRACTICE, PRACTICE,
+					PRACTICE, PRACTICE, QUALI,
+					QUALI, QUALI, QUALI, QUALI,
+					RACE, RACE, IDLE};
+
+int current_mode = IDLE;
 unsigned long idle_start = 0;
 unsigned long idle_time = 0;
 
@@ -591,21 +603,6 @@ void setup() {
 
 	idle = new IMode();
 	idle->Init();
-
-	// Define modes
-	modes[0] = "IDLE"; // Unknown
-	modes[1] = "PRACTICE";
-	modes[2] = "PRACTICE";
-	modes[3] = "PRACTICE";
-	modes[4] = "PRACTICE";
-	modes[5] = "QUALI";
-	modes[6] = "QUALI";
-	modes[7] = "QUALI";
-	modes[8] = "QUALI";
-	modes[9] = "QUALI";
-	modes[10] = "RACE";
-	modes[11] = "RACE";
-	modes[12] = "IDLE"; // TT
 }
 
 // MAIN LOOP
@@ -680,70 +677,63 @@ void loop() {
 		}
 
 		// Notify mode change if session changed
-		if (modes[packet_session.m_sessionType] != current_mode)
+		if (mode_map[packet_session.m_sessionType] != current_mode)
 		{
-			if (!(packet_session.m_isSpectating && current_mode == "SPECTATOR"))
+			if (!(packet_session.m_isSpectating && current_mode == SPECTATOR))
 			{
 				// Deallocate memory from previous mode
 
-				if (current_mode == "IDLE")
+				switch (current_mode)
 				{
+				case IDLE:
 					delete idle;
 					idle = NULL;
-				}
-				else if (current_mode == "PRACTICE")
-				{
+				case PRACTICE:
 					delete practice;
 					practice = NULL;
-				}
-				else if (current_mode == "QUALI")
-				{
+				case QUALI:
 					delete quali;
 					quali = NULL;
-				}
-				else if (current_mode == "RACE")
-				{
+				case RACE:
 					delete race;
 					race = NULL;
-				}
-				else if (current_mode == "SPECTATOR")
-				{
+				case SPECTATOR:
 					delete spectator;
 					spectator = NULL;
 				}
 
 				// Change mode
 				first_packet = true;
-				current_mode = modes[packet_session.m_sessionType];
+				current_mode = mode_map[packet_session.m_sessionType];
 				ClearScreen();
 
 				if (!packet_session.m_isSpectating)
 				{
-					if (current_mode == "PRACTICE")
+
+					switch (current_mode)
 					{
+					case PRACTICE:
 						practice = new PMode();
 						practice->Init();
-					}
-					else if (current_mode == "QUALI")
-					{
+						break;
+					case QUALI:
 						quali = new QMode();
 						quali->Init();
-					}
-					else if (current_mode == "RACE")
-					{
+						break;
+					case RACE:
 						race = new RMode();
 						race->Init();
-					}
-					else
-					{
-						current_mode = "IDLE";
+						break;
+					default:
+						current_mode = IDLE;
 						idle = new IMode();
 						idle->Init();
+						break;
 					}
 				}
 				else
 				{
-					current_mode = "SPECTATOR";
+					current_mode = SPECTATOR;
 					spectator = new SMode();
 					spectator->Init();
 				}
@@ -751,20 +741,21 @@ void loop() {
 		}
 
 		// Execute actions based on mode
-		if (current_mode == "PRACTICE")
+		switch (current_mode)
 		{
-		}
-		else if (current_mode == "QUALI")
-		{
+		case IDLE:
+			break;
+		case PRACTICE:
+			break;
+		case QUALI:
 			quali->Update();
-		}
-		else if (current_mode == "RACE")
-		{
+			break;
+		case RACE:
 			race->Update();
-		}
-		else if (current_mode == "SPECTATOR")
-		{
+			break;
+		case SPECTATOR:
 			spectator->Update();
+			break;
 		}
 
 		if (first_packet)
@@ -781,9 +772,9 @@ void loop() {
 		else
 		{
 			idle_time = millis() - idle_start;
-			if (idle_time > 5000 && current_mode != "IDLE")
+			if (idle_time > 5000 && current_mode != IDLE)
 			{
-				current_mode = "IDLE";
+				current_mode = IDLE;
 				idle = new IMode();
 				idle->Init();
 			}
