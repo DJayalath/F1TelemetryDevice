@@ -298,6 +298,7 @@ struct Fuel
 		rate /= ((float)nextfree - 1);
 
 
-		return (fuel[nextfree - 1] - (laps_remaining + 1) * rate) / rate;
+		return (fuel[nextfree - 1] - (laps_remaining) * rate) / rate;
+
 	}
 };

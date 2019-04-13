@@ -4,9 +4,11 @@
  Author:	Dulhan Jayalath
 */
 
-// NOTES
-// FIX for Race in Spectator mode
-// 
+// TO FIX:
+// - Comparisons are inefficient because they are made even while
+//   a new packet still hasn't been recieved.
+// - Could create a struct to store current, old and whether a new packet is received?
+// - Maybe also create a function to compare if changes have been made to make things cleaner
 
 // Graphics
 #include <SPI.h>
@@ -24,11 +26,11 @@
 
 // Misc.
 #include <cmath>
-#include <map>
 
 // UDP Data Structures
 #include "DataStructures.hpp"
 
+// Default UDP Port to listen to
 #define UDP_PORT 20777
 
 // Wireless router login
@@ -48,7 +50,8 @@ PacketParticipantsData packet_participants;
 PacketCarSetupData packet_setups;
 PacketCarTelemetryData packet_telemetry;
 PacketCarStatusData packet_status;
-// Old data
+
+// Also store previous packet for comparison
 PacketMotionData packet_motion_old;
 PacketSessionData packet_session_old;
 PacketLapData packet_lap_old;
@@ -58,9 +61,12 @@ PacketCarSetupData packet_setups_old;
 PacketCarTelemetryData packet_telemetry_old;
 PacketCarStatusData packet_status_old;
 
+// Independantly store if this is the first packet received
+// and the player's car index in each array
+bool first_packet = true;
 int player_id = 0;
 
-enum PACKET_SIZE
+enum PACKET_SIZE // in bytes
 {
 	SIZE_HEADER = 21,
 	SIZE_MOTION = 1341,
@@ -73,7 +79,7 @@ enum PACKET_SIZE
 	SIZE_STATUS = 1061
 };
 
-enum PACKET_TYPE
+enum PACKET_TYPE // used to identify header's packetID
 {
 	TYPE_MOTION,
 	TYPE_SESSION,
@@ -84,9 +90,6 @@ enum PACKET_TYPE
 	TYPE_TELEMETRY,
 	TYPE_STATUS
 };
-
-bool first_packet = true;
-
 
 // For the Esp connection of touch
 #define TFT_DC 2
@@ -104,12 +107,14 @@ enum MODE
 	SPECTATOR
 };
 
-int mode_map[13] = {IDLE, PRACTICE, PRACTICE,
-					PRACTICE, PRACTICE, QUALI,
-					QUALI, QUALI, QUALI, QUALI,
-					RACE, RACE, IDLE};
+// Map given sessionType to mode enumerations
+int mode_map[13] = {IDLE, PRACTICE, PRACTICE, PRACTICE, PRACTICE, QUALI,
+					QUALI, QUALI, QUALI, QUALI, RACE, RACE, IDLE};
 
+//Store current mode
 int current_mode = IDLE;
+
+// For tracking time between packets
 unsigned long idle_start = 0;
 unsigned long idle_time = 0;
 
@@ -161,7 +166,7 @@ struct QMode
 		tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
 		tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
 		tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
-		tft.drawFastHLine(0, 240, 320, ILI9341_CYAN);
+		tft.drawFastHLine(0, 239, 320, ILI9341_CYAN);
 		tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
 	}
 
@@ -178,9 +183,16 @@ struct QMode
 			if (packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] != packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
 				DisplayTyreTemps(i, packet_telemetry.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], packet_telemetry_old.m_carTelemetryData[player_id].m_tyresInnerTemperature[i]);
 		}
-
+		
+		// Fuel mix
 		if (packet_status_old.m_carStatusData[player_id].m_fuelMix != packet_status.m_carStatusData[player_id].m_fuelMix || first_packet)
 			DisplayFuelMix(packet_status.m_carStatusData[player_id].m_fuelMix);
+
+		// Session timer
+		if (packet_session.m_sessionTimeLeft != packet_session_old.m_sessionTimeLeft || first_packet)
+		{
+			DisplayTimeRemaining(packet_session.m_sessionTimeLeft);
+		}
 	}
 
 private:
@@ -229,26 +241,54 @@ private:
 		{
 		case 0:
 			str_mix = "Lean Fuel";
-			tft.fillRect(0, 0, 320, 49, ILI9341_DARKGREY);
+			tft.fillRect(0, 0, 160, 49, ILI9341_DARKGREY);
 			break;
 		case 1:
 			str_mix = "Stnd Fuel";
-			tft.fillRect(0, 0, 320, 49, ILI9341_RED);
+			tft.fillRect(0, 0, 160, 49, ILI9341_RED);
 			break;
 		case 2:
 			str_mix = "Rich Fuel";
-			tft.fillRect(0, 0, 320, 49, ILI9341_RED);
+			tft.fillRect(0, 0, 160, 49, ILI9341_RED);
 			break;
 		case 3:
 			str_mix = "MAX. Fuel";
-			tft.fillRect(0, 0, 320, 49, ILI9341_MAGENTA);
+			tft.fillRect(0, 0, 160, 49, ILI9341_MAGENTA);
 			break;
 		}
 
 		// Write to display
-		WriteCentered(160, 25, str_mix, 3);
+		WriteCentered(80, 25, str_mix, 2);
 
 		// Reset text colours
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void DisplayTimeRemaining(uint16 time)
+	{
+		// Split into minutes and seconds
+		int minutes = time / 60;
+		int seconds = time - minutes * 60;
+
+		// Set text colour warning
+		if (time < 300)
+			tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+		else
+			tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+
+		// Build string
+		String str_time;
+		if (minutes < 10)
+			str_time += "0";
+		str_time += minutes;
+		str_time += ":";
+		if (seconds < 10)
+			str_time += "0";
+		str_time += seconds;
+
+		WriteCentered(240, 25, str_time, 3);
+
+		// Reset colour
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 	}
 };
@@ -487,6 +527,7 @@ RMode* race = NULL;
 
 struct SMode
 {
+	// Spectating car index
 	int index;
 
 	void Init()
@@ -503,6 +544,7 @@ struct SMode
 	{
 		if (packet_session.m_spectatorCarIndex != packet_session_old.m_spectatorCarIndex || first_packet)
 		{
+			tft.fillRect(0, 0, 320, 50, ILI9341_BLACK);
 			index = packet_session.m_spectatorCarIndex;
 			String str_name;
 			str_name += packet_participants.m_participants[index].m_name;
@@ -519,9 +561,12 @@ private:
 
 	void DisplayBestTime(float t)
 	{
+		// Split time into minutes, seconds and milliseconds
 		int minutes = (int)t / 60;
 		int seconds = t - minutes * 60;
 		int millisec = (t - (int)t) * 1000.f;
+
+		// Build string with zero padding
 		String str_best;
 		str_best += "Best: 0";
 		str_best += minutes;
@@ -538,6 +583,8 @@ private:
 		else if (millisec < 100)
 			str_best += (char)48;
 		str_best += millisec;
+
+		// Write to display
 		WriteCentered(160, 75, str_best, 2);
 	}
 };
@@ -613,10 +660,12 @@ void loop() {
 	int packet_size = udp_listener.parsePacket();
 	if (packet_size)
 	{
+		// Reset idle time, clear screen if first packet
 		idle_time = 0;
 		if (first_packet)
 			ClearScreen();
 
+		// Copy data from packet
 		switch (packet_size)
 		{
 		case SIZE_MOTION:
@@ -676,13 +725,12 @@ void loop() {
 			break;
 		}
 
-		// Notify mode change if session changed
+		// Change mode if session type is changed
 		if (mode_map[packet_session.m_sessionType] != current_mode)
 		{
 			if (!(packet_session.m_isSpectating && current_mode == SPECTATOR))
 			{
 				// Deallocate memory from previous mode
-
 				switch (current_mode)
 				{
 				case IDLE:
@@ -758,12 +806,13 @@ void loop() {
 			break;
 		}
 
+		// Indicate that first packet has passed
 		if (first_packet)
 			first_packet = false;
 	}
 	else
 	{
-		// Automatically switch to idle mode if no packets received for > 500ms
+		// Automatically switch to idle mode if no packets received for > 5000ms
 		if (idle_time == 0)
 		{
 			idle_start = millis();
