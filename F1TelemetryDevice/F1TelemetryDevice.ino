@@ -166,7 +166,7 @@ struct QMode
 	int16_t tyre_pos[4][2] = { {0, 145}, {160, 145}, {0, 50}, {160, 50} };
 
 	// Current value storage
-	uint8 tyre_wear[4];
+	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
 	uint16 tyre_temp[4];
 	uint8 fuel_mix;
 	uint16 time_left;
@@ -192,9 +192,6 @@ struct QMode
 
 	void Update()
 	{
-		if (drs)
-			tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-
 		// Tyre telemetry
 		for (int i = 0; i < 4; i++)
 		{
@@ -212,7 +209,6 @@ struct QMode
 			}
 
 		}
-		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 
 		// Fuel mix
 		if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
@@ -231,6 +227,25 @@ struct QMode
 		if (drs != packet_telemetry.current.m_carTelemetryData[player_id].m_drs)
 		{
 			drs = packet_telemetry.current.m_carTelemetryData[player_id].m_drs;
+
+			if (drs)
+			{
+				tft.drawFastVLine(0, 50, 240, ILI9341_GREEN);
+				tft.drawFastVLine(160, 50, 240, ILI9341_GREEN);
+				tft.drawFastVLine(319, 50, 240, ILI9341_GREEN);
+				tft.drawFastHLine(0, 50, 320, ILI9341_GREEN);
+				tft.drawFastHLine(0, 239, 320, ILI9341_GREEN);
+				tft.drawFastHLine(0, 145, 320, ILI9341_GREEN);
+			}
+			else
+			{
+				tft.drawFastVLine(0, 50, 240, ILI9341_CYAN);
+				tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
+				tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
+				tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
+				tft.drawFastHLine(0, 239, 320, ILI9341_CYAN);
+				tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
+			}
 		}
 	}
 
@@ -336,7 +351,7 @@ QMode* quali = NULL;
 struct RMode
 {
 	// Current stored variables
-	uint8 tyre_wear[4];
+	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
 	uint16 tyre_temp[4];
 	uint8 fuel_mix;
 	uint8 penalties;
@@ -344,11 +359,12 @@ struct RMode
 	uint8 wing_dmg[2]; // 0 = LW, 1 = RW
 	float fuel_in_tank;
 	float lap_distance;
-	uint8 lap_num;
+	uint8 lap_num = 1;
 	uint16 track_length;
 	float lap_percent_complete;
 	int laps_completed = 0;
 	float fuel_difference[2];
+	bool fuel_ready = false;
 
 	// Tyre position array (RL, RR, FL, FR)
 	uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
@@ -424,7 +440,7 @@ struct RMode
 		// LEFT WING DMG
 		if (wing_dmg[0] != packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage || first_packet)
 		{
-			wing_dmg[1] = packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage;
+			wing_dmg[0] = packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage;
 			DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage, 205);
 		}
 
@@ -436,7 +452,7 @@ struct RMode
 		}
 
 		// FUEL REMAINING
-		if (fuel_in_tank != packet_status.current.m_carStatusData[player_id].m_fuelInTank || first_packet)
+		if (!fuel_ready && fuel_in_tank != packet_status.current.m_carStatusData[player_id].m_fuelInTank || first_packet)
 		{
 			fuel_in_tank = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
 			DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
@@ -445,7 +461,7 @@ struct RMode
 		// FUEL PREDICTION
 		if (lap_distance != packet_lap.current.m_lapData[player_id].m_lapDistance)
 		{
-			if (lap_distance > packet_lap.current.m_lapData[player_id].m_lapDistance)
+			if (lap_num < packet_lap.current.m_lapData[player_id].m_currentLapNum)
 			{
 				lap_num = packet_lap.current.m_lapData[player_id].m_currentLapNum;
 				laps_completed += 1;
