@@ -1,7 +1,7 @@
 /*
- Name:		F1TelemetryDevice.ino
- Created:	4/6/2019 2:51:00 PM
- Author:	Dulhan Jayalath
+ Name:    F1TelemetryDevice.ino
+ Created: 4/6/2019 2:51:00 PM
+ Author:  Dulhan Jayalath
 */
 
 // TO DO:
@@ -10,7 +10,7 @@
 
 // Graphics
 #include <SPI.h>
-#include <Adafruit_ILI9341esp.h>
+#include <Adafruit_ILI9341.h>
 #include <Adafruit_GFX.h>
 
 // WiFi
@@ -34,6 +34,7 @@
 
 // Default UDP Port to listen to
 #define UDP_PORT 20777
+#define ESP_SPI_FREQ 4000000
 
 // Wireless router login
 String AP_SSID = "AP-F1TELEMETRY";
@@ -59,7 +60,11 @@ Packet <PacketCarSetupData> packet_setups;
 Packet <PacketCarTelemetryData> packet_telemetry;
 Packet <PacketCarStatusData> packet_status;
 
+// Prototypes
 template<typename T> void ReadPacket(Packet<T>& packet);
+void WriteCentered(int16_t x, int16_t y, String string, int8 size);
+int16_t GetTextHeight(int8 size);
+void ClearScreen();
 
 // Independantly store if this is the first packet received
 // and the player's car index in each array
@@ -98,7 +103,6 @@ enum PACKET_TYPE // used to identify header's packetID
 // 320x240 display
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
-
 enum MODE
 {
 	IDLE,
@@ -109,8 +113,8 @@ enum MODE
 };
 
 // Map given sessionType to mode enumerations
-int mode_map[13] = {IDLE, PRACTICE, PRACTICE, PRACTICE, PRACTICE, QUALI,
-					QUALI, QUALI, QUALI, QUALI, RACE, RACE, IDLE};
+int mode_map[13] = { IDLE, PRACTICE, PRACTICE, PRACTICE, PRACTICE, QUALI,
+		  QUALI, QUALI, QUALI, QUALI, RACE, RACE, IDLE };
 
 //Store current mode
 int current_mode = IDLE;
@@ -131,6 +135,12 @@ struct IMode
 		WriteCentered(160, 120, "Waiting for data from", 2);
 		WriteCentered(160, 120 + GetTextHeight(3) * 2, WiFi.localIP().toString().c_str(), 3);
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void Update()
+	{
+		// Check for OTA updates
+		ArduinoOTA.handle();
 	}
 };
 IMode* idle = NULL;
@@ -184,7 +194,7 @@ struct QMode
 			if (packet_telemetry.last.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
 				DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], packet_telemetry.last.m_carTelemetryData[player_id].m_tyresInnerTemperature[i]);
 		}
-		
+
 		// Fuel mix
 		if (packet_status.last.m_carStatusData[player_id].m_fuelMix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
 			DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
@@ -220,7 +230,7 @@ private:
 		// Wipe previous
 		if (wear >= 10 && wear_last < 10 ||
 			wear < 10 && wear_last >= 10)
-		tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 66 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 66 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
 
 		// Build string
 		String str_tyre_wear;
@@ -373,156 +383,156 @@ struct RMode
 			DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
 	}
 
-	private:
-		void DisplayFuelRemaining(float fuel_remaining)
+private:
+	void DisplayFuelRemaining(float fuel_remaining)
+	{
+		// Round off to 1 decimal place
+		fuel_remaining = floor(fuel_remaining * 10.f) / 10.f;
+		// Build string
+		String str_fuel;
+		str_fuel += fuel_remaining;
+		str_fuel += " kg";
+		// Write to display
+		WriteCentered(240, 120, str_fuel, 2);
+	}
+
+	void DisplayFuelPrediction(float laps_remaining)
+	{
+		// Wipe previous prediction
+		tft.fillRect(161, 120 - GetTextHeight(2) / 2, 158, GetTextHeight(2), ILI9341_BLACK);
+
+		// Get prediction
+		float prediction = fuel.GetDelta(laps_remaining);
+
+		// Build string
+		String str_fuel_prediction;
+		if (prediction > 0)
 		{
-			// Round off to 1 decimal place
-			fuel_remaining = floor(fuel_remaining * 10.f) / 10.f;
-			// Build string
-			String str_fuel;
-			str_fuel += fuel_remaining;
-			str_fuel += " kg";
-			// Write to display
-			WriteCentered(240, 120, str_fuel, 2);
+			str_fuel_prediction += "+";
+			tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+		}
+		else
+		{
+			str_fuel_prediction += "-";
+			tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+			prediction *= -1;
+		}
+		str_fuel_prediction += prediction;
+		str_fuel_prediction += " laps";
+
+		// Write to display
+		WriteCentered(240, 120, str_fuel_prediction, 2);
+
+		// Return to previous colour output
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void DisplayWingDMG(int dmg, int pos)
+	{
+		// Wipe previous
+		tft.fillRect(pos - 34, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
+
+		// Set colour
+		if (dmg == 0)
+			tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+		else if (dmg < 20)
+			tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+		else
+			tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+
+		// Build string
+		String str_dmg;
+		str_dmg += dmg;
+		str_dmg += (char)37;
+
+		// Write to display
+		WriteCentered(pos, 170, str_dmg, 2);
+
+		// Return to previous colour output
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void DisplayFuelMix(int mix)
+	{
+		// Build string
+		String str_mix;
+		switch (mix)
+		{
+		case 0:
+			str_mix = "Lean Fuel";
+			break;
+		case 1:
+			str_mix = "Stnd Fuel";
+			break;
+		case 2:
+			str_mix = "Rich Fuel";
+			break;
+		case 3:
+			str_mix = "MAX. Fuel";
+			break;
 		}
 
-		void DisplayFuelPrediction(float laps_remaining)
-		{
-			// Wipe previous prediction
-			tft.fillRect(161, 120 - GetTextHeight(2) / 2, 158, GetTextHeight(2), ILI9341_BLACK);
+		// Write to display
+		WriteCentered(240, 80, str_mix, 2);
+	}
 
-			// Get prediction
-			float prediction = fuel.GetDelta(laps_remaining);
+	void DisplayDRS(int drs_on)
+	{
+		// Select colour
+		if (drs_on)
+			tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+		else
+			tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
 
-			// Build string
-			String str_fuel_prediction;
-			if (prediction > 0)
-			{
-				str_fuel_prediction += "+";
-				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-			}
-			else
-			{
-				str_fuel_prediction += "-";
-				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-				prediction *= -1;
-			}
-			str_fuel_prediction += prediction;
-			str_fuel_prediction += " laps";
+		// Write to display
+		WriteCentered(240, GetTextHeight(4), "DRS", 4);
 
-			// Write to display
-			WriteCentered(240, 120, str_fuel_prediction, 2);
+		// Return to previous colour output
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
 
-			// Return to previous colour output
-			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-		}
+	void DisplayPenalties(int penalty_time)
+	{
+		// Build string
+		String str_penalty = "+ ";
+		str_penalty += penalty_time;
+		str_penalty += "s";
 
-		void DisplayWingDMG(int dmg, int pos)
-		{
-			// Wipe previous
-			tft.fillRect(pos - 34, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
+		// Write to display
+		WriteCentered(240, 240 - GetTextHeight(3), str_penalty, 3);
+	}
 
-			// Set colour
-			if (dmg == 0)
-				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-			else if (dmg < 20)
-				tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
-			else
-				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+	void DisplayTyreTemps(int index, int temperature, int temperature_last)
+	{
+		// If digits change, wipe the area first
+		if (temperature >= 100 && temperature_last < 100 ||
+			temperature < 100 && temperature_last >= 100)
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 60, 78, 55, ILI9341_BLACK);
 
-			// Build string
-			String str_dmg;
-			str_dmg += dmg;
-			str_dmg += (char)37;
+		// Build string
+		String str_tyre_temp;
+		str_tyre_temp += temperature;
+		str_tyre_temp += (char)248;
+		str_tyre_temp += "C";
 
-			// Write to display
-			WriteCentered(pos, 170, str_dmg, 2);
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 90, str_tyre_temp, 2);
+	}
 
-			// Return to previous colour output
-			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-		}
+	void DisplayTyreWear(int index, int wear, int wear_last)
+	{
+		// Wipe previous
+		if (wear >= 10 && wear_last < 10 || wear < 10 && wear_last >= 10)
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 1, 78, 55, ILI9341_BLACK);
 
-		void DisplayFuelMix(int mix)
-		{
-			// Build string
-			String str_mix;
-			switch (mix)
-			{
-			case 0:
-				str_mix = "Lean Fuel";
-				break;
-			case 1:
-				str_mix = "Stnd Fuel";
-				break;
-			case 2:
-				str_mix = "Rich Fuel";
-				break;
-			case 3:
-				str_mix = "MAX. Fuel";
-				break;
-			}
+		// Build string
+		String str_tyre_wear;
+		str_tyre_wear += wear;
+		str_tyre_wear += (char)37;
 
-			// Write to display
-			WriteCentered(240, 80, str_mix, 2);
-		}
-
-		void DisplayDRS(int drs_on)
-		{
-			// Select colour
-			if (drs_on)
-				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
-			else
-				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-
-			// Write to display
-			WriteCentered(240, GetTextHeight(4), "DRS", 4);
-
-			// Return to previous colour output
-			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-		}
-
-		void DisplayPenalties(int penalty_time)
-		{
-			// Build string
-			String str_penalty = "+ ";
-			str_penalty += penalty_time;
-			str_penalty += "s";
-
-			// Write to display
-			WriteCentered(240, 240 - GetTextHeight(3), str_penalty, 3);
-		}
-
-		void DisplayTyreTemps(int index, int temperature, int temperature_last)
-		{
-			// If digits change, wipe the area first
-			if (temperature >= 100 && temperature_last < 100 ||
-				temperature < 100 && temperature_last >= 100)
-				tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 60, 78, 55, ILI9341_BLACK);
-
-			// Build string
-			String str_tyre_temp;
-			str_tyre_temp += temperature;
-			str_tyre_temp += (char)248;
-			str_tyre_temp += "C";
-
-			// Write to display
-			WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 90, str_tyre_temp, 2);
-		}
-
-		void DisplayTyreWear(int index, int wear, int wear_last)
-		{
-			// Wipe previous
-			if (wear >= 10 && wear_last < 10 || wear < 10 && wear_last >= 10)
-				tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 1, 78, 55, ILI9341_BLACK);
-
-			// Build string
-			String str_tyre_wear;
-			str_tyre_wear += wear;
-			str_tyre_wear += (char)37;
-
-			// Write to display
-			WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 30, str_tyre_wear, 3);
-		}
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 30, str_tyre_wear, 3);
+	}
 };
 RMode* race = NULL;
 
@@ -593,11 +603,11 @@ SMode* spectator = NULL;
 
 // Auxillary Functions
 
-template<typename A> void ReadPacket(Packet<A>& packet)
+template<typename A> void ReadPacket(Packet<A> & packet)
 {
 	//char incoming[sizeof(A)];]
 	packet.last = packet.current;
-	udp_listener.read((char*)&packet.current, sizeof(A));
+	udp_listener.read((char*)& packet.current, sizeof(A));
 	//*last = *current;
 	//memcpy(current, incoming, sizeof(A));
 };
@@ -667,15 +677,40 @@ void setup() {
 
 	// OTA
 	ArduinoOTA.onStart([]() {
-		Serial.println("Start");
-	});
+		ClearScreen();
+		});
+	ArduinoOTA.onEnd([]() {
+		ClearScreen();
+		WriteCentered(160, 100, "Update Complete", 3);
+		WriteCentered(160, 140, "Restarting...", 3);
+		});
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+		WriteCentered(160, 100, "Updating...", 3);
+		int prog = (progress / (total / 100));
+		String str_progress;
+		str_progress += prog;
+		str_progress += (char)37;
+		WriteCentered(160, 140, str_progress, 3);
+		});
+	ArduinoOTA.onError([](ota_error_t error) {
+		String str_error;
+		if (error == OTA_AUTH_ERROR) str_error = "Auth Failed";
+		else if (error == OTA_BEGIN_ERROR) str_error = "Begin Failed";
+		else if (error == OTA_CONNECT_ERROR) str_error = "Connect Failed";
+		else if (error == OTA_RECEIVE_ERROR) str_error = "Receive Failed";
+		else if (error == OTA_END_ERROR) str_error = "End Failed";
+		ClearScreen();
+		WriteCentered(160, 100, "Update Error", 3);
+		WriteCentered(160, 140, str_error, 3);
+		delay(5000);
+		ESP.restart();
+		});
 	ArduinoOTA.begin();
 }
 
 // MAIN LOOP
 
 void loop() {
-
 
 	// Test if packet has been received
 	int packet_size = udp_listener.parsePacket();
@@ -795,6 +830,7 @@ void loop() {
 		switch (current_mode)
 		{
 		case IDLE:
+			idle->Update();
 			break;
 		case PRACTICE:
 			break;
@@ -824,12 +860,20 @@ void loop() {
 		else
 		{
 			idle_time = millis() - idle_start;
-			if (idle_time > 10000 && current_mode != IDLE)
+			if (current_mode != IDLE)
 			{
-				current_mode = IDLE;
-				idle = new IMode();
-				idle->Init();
+				if (idle_time > 10000)
+				{
+					current_mode = IDLE;
+					idle = new IMode();
+					idle->Init();
+				}
+			}
+			else
+			{
+				idle->Update();
 			}
 		}
 	}
+
 }
