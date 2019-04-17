@@ -4,11 +4,9 @@
  Author:	Dulhan Jayalath
 */
 
-// TO FIX:
-// - Comparisons are inefficient because they are made even while
-//   a new packet still hasn't been recieved.
-// - Could create a struct to store current, old and whether a new packet is received?
-// - Maybe also create a function to compare if changes have been made to make things cleaner
+// TO DO:
+// - Actually use the packet_received variable for something
+// - OTA updates
 
 // Graphics
 #include <SPI.h>
@@ -24,10 +22,12 @@
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>
 
+// WiFi OTA
+#include <ArduinoOTA.h>
+#include <ESP8266mDNS.h>
+
 // Misc.
 #include <cmath>
-#include <map>
-#include <vector>
 
 // UDP Data Structures
 #include "DataStructures.hpp"
@@ -97,6 +97,7 @@ enum PACKET_TYPE // used to identify header's packetID
 
 // 320x240 display
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+
 
 enum MODE
 {
@@ -624,8 +625,12 @@ void ClearScreen()
 
 void setup() {
 
+	// Update CPU Freq to 160MHz
+	system_update_cpu_freq(160);
 	// Set baudrate
 	Serial.begin(115200);
+
+	Serial.println(system_get_cpu_freq()); // Debugging
 
 	// Setup TFT
 	delay(1000);
@@ -659,11 +664,18 @@ void setup() {
 
 	idle = new IMode();
 	idle->Init();
+
+	// OTA
+	ArduinoOTA.onStart([]() {
+		Serial.println("Start");
+	});
+	ArduinoOTA.begin();
 }
 
 // MAIN LOOP
 
 void loop() {
+
 
 	// Test if packet has been received
 	int packet_size = udp_listener.parsePacket();
@@ -812,7 +824,7 @@ void loop() {
 		else
 		{
 			idle_time = millis() - idle_start;
-			if (idle_time > 5000 && current_mode != IDLE)
+			if (idle_time > 10000 && current_mode != IDLE)
 			{
 				current_mode = IDLE;
 				idle = new IMode();
