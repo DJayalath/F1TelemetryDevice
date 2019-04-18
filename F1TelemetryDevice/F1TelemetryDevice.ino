@@ -5,9 +5,7 @@
 */
 
 // TO DO:
-// - Actually use the packet_received variable for something
-// - DRS indicator in qualifying
-// - Fix race fuel calculation
+// - Fix race fuel calculation (Update every half-lap?)
 // - Safety Car and/or VSC Mode
 
 
@@ -357,14 +355,12 @@ struct RMode
 	uint8 penalties;
 	uint8 drs;
 	uint8 wing_dmg[2]; // 0 = LW, 1 = RW
-	float fuel_in_tank;
 	float lap_distance;
-	uint8 lap_num = 1;
 	uint16 track_length;
-	float lap_percent_complete;
-	int laps_completed = 0;
-	float fuel_difference[2];
-	bool fuel_ready = false;
+	float fuel_difference[2] = { -1, -1 };
+	uint8 lap_num[2];
+	float lap_pos[2];
+	const float update_delta = 0.5f;
 
 	// Tyre position array (RL, RR, FL, FR)
 	uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
@@ -392,9 +388,6 @@ struct RMode
 		tft.drawFastVLine(170, 170 - 20, 40, ILI9341_CYAN);
 		tft.drawFastVLine(240, 170 - 20, 40, ILI9341_CYAN);
 		tft.drawFastVLine(310, 170 - 20, 40, ILI9341_CYAN);
-
-		track_length = packet_session.current.m_trackLength;
-		fuel_difference[0] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
 	}
 
 	void Update()
@@ -451,46 +444,51 @@ struct RMode
 			DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage, 275);
 		}
 
-		// FUEL REMAINING
-		if (!fuel_ready && fuel_in_tank != packet_status.current.m_carStatusData[player_id].m_fuelInTank || first_packet)
-		{
-			fuel_in_tank = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
-			DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
-		}
-
 		// FUEL PREDICTION
 		if (lap_distance != packet_lap.current.m_lapData[player_id].m_lapDistance)
 		{
-			if (lap_num < packet_lap.current.m_lapData[player_id].m_currentLapNum)
-			{
-				lap_num = packet_lap.current.m_lapData[player_id].m_currentLapNum;
-				laps_completed += 1;
-			}
-
 			lap_distance = packet_lap.current.m_lapData[player_id].m_lapDistance;
-			lap_percent_complete = lap_distance / (float)track_length;
-
-			fuel_difference[1] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
-
-			float rate = (fuel_difference[0] - fuel_difference[1]) / ((float)laps_completed + lap_percent_complete);
-			uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum - 1;
-			float est_fuel_required = (laps_remaining + (1.f - lap_percent_complete)) * rate;
-			float est_fuel_left = (packet_status.current.m_carStatusData[player_id].m_fuelInTank - est_fuel_required) / rate;
-
-			String str_fuel_left;
-			if (est_fuel_left > 0)
+			if (fuel_difference[0] == -1)
 			{
-				str_fuel_left += "+";
-				tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+				track_length = packet_session.current.m_trackLength;
+				fuel_difference[0] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
+				lap_num[0] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
+				lap_pos[0] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
+				DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
 			}
-			else
+
+			lap_num[1] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
+			lap_pos[1] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
+
+			if (((float)lap_num[1] + lap_pos[1]) - ((float)lap_num[0] + lap_pos[0]) > update_delta)
 			{
-				tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+				fuel_difference[1] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
+				float rate = (fuel_difference[0] - fuel_difference[1]) / update_delta;
+				uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum - 1;
+				float est_fuel_required = ((float)laps_remaining - lap_pos[1]) * rate;
+				float est_fuel_left = (packet_status.current.m_carStatusData[player_id].m_fuelInTank - est_fuel_required) / rate;
+
+				// Output
+				String str_fuel_left;
+				if (est_fuel_left > 0)
+				{
+					str_fuel_left += "+";
+					tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+				}
+				else
+				{
+					tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+				}
+				str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
+				str_fuel_left += " laps";
+				WriteCentered(240, 120, str_fuel_left, 2);
+				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+
+
+				fuel_difference[0] = fuel_difference[1];
+				lap_num[0] = lap_num[1];
+				lap_pos[0] = lap_pos[1];
 			}
-			str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
-			str_fuel_left += " laps";
-			WriteCentered(240, 120, str_fuel_left, 2);
-			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 		}
 	}
 
