@@ -1,3 +1,6 @@
+// NOTE RECOMMENDED FOR USE
+// CONTAINS LEGACY DATA STRUCTURES
+
 #pragma pack(push, 1)
 struct CarUDPData
 

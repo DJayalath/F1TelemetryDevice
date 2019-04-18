@@ -19,8 +19,11 @@
 */
 
 // TO DO:
-// - Fix race fuel calculation (Update every half-lap?)
-// - Safety Car and/or VSC Mode
+// - ERS Indicator for Quali (copy from race?)
+// - Continuous race fuel calc updating
+// - Fix race start fuel = 0
+// - Tyre wear and temp overlap (due to starting null values?)
+// - TEST SC Mode timing overlap
 
 
 // Graphics
@@ -180,7 +183,7 @@ struct QMode
 
 	// Current value storage
 	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
-	uint16 tyre_temp[4];
+	uint16 tyre_temp[4] = { 90, 90, 90, 90 };
 	uint8 fuel_mix;
 	uint16 time_left;
 	uint8 drs;
@@ -365,17 +368,22 @@ struct RMode
 {
 	// Current stored variables
 	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
-	uint16 tyre_temp[4];
-	uint8 fuel_mix;
-	uint8 penalties;
-	uint8 drs;
-	uint8 wing_dmg[2]; // 0 = LW, 1 = RW
-	float lap_distance;
-	uint16 track_length;
+	uint16 tyre_temp[4] = { 90, 90, 90, 90 };
+	uint8 fuel_mix = 0;
+	uint8 penalties = 0;
+	uint8 drs = 0;
+	uint8 wing_dmg[2] = { 0, 0 }; // 0 = LW, 1 = RW
+	float lap_distance = 0.f;
+	uint16 track_length = 0;
 	float fuel_difference[2] = { -1, -1 };
-	uint8 lap_num[2];
-	float lap_pos[2];
+	uint8 lap_num[2] = { 1, 1 };
+	float lap_pos[2] = { 0.f, 0.f };
 	const float update_delta = 0.5f;
+	float energy = 0.f;
+	const float MAX_ENERGY = 4000000.f;
+	uint8 ers_mode = 0;
+	String ers_mode_map[6] = { "  ERS  OFF  ", "  ERS  LOW  ", " ERS MEDIUM ", "  ERS HIGH  ", "ERS OVERTAKE", " ERS HOTLAP "};
+	uint32 ers_colour_map[6] = { ILI9341_DARKGREY, ILI9341_WHITE, ILI9341_YELLOW, ILI9341_ORANGE, ILI9341_RED, ILI9341_MAGENTA };
 
 	// Tyre position array (RL, RR, FL, FR)
 	uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
@@ -390,19 +398,19 @@ struct RMode
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 
 		// Draw boxes for each tyre
-		tft.drawFastVLine(0, 0, 240, ILI9341_CYAN);
-		tft.drawFastVLine(160, 0, 240, ILI9341_CYAN);
-		tft.drawFastVLine(80, 0, 240, ILI9341_CYAN);
+		tft.drawFastVLine(0, 0, 229, ILI9341_CYAN);
+		tft.drawFastVLine(160, 0, 229, ILI9341_CYAN);
+		tft.drawFastVLine(80, 0, 229, ILI9341_CYAN);
 		tft.drawFastHLine(0, 120, 160, ILI9341_CYAN);
 		tft.drawFastHLine(0, 0, 160, ILI9341_CYAN);
-		tft.drawFastHLine(0, 239, 160, ILI9341_CYAN);
+		tft.drawFastHLine(0, 229, 160, ILI9341_CYAN);
 
 		// Draw boxes for wing
-		tft.drawFastHLine(170, 170 - 20, 140, ILI9341_CYAN);
-		tft.drawFastHLine(170, 170 + 20, 140, ILI9341_CYAN);
-		tft.drawFastVLine(170, 170 - 20, 40, ILI9341_CYAN);
-		tft.drawFastVLine(240, 170 - 20, 40, ILI9341_CYAN);
-		tft.drawFastVLine(310, 170 - 20, 40, ILI9341_CYAN);
+		tft.drawFastHLine(170, 150 - 20, 140, ILI9341_CYAN);
+		tft.drawFastHLine(170, 150 + 20, 140, ILI9341_CYAN);
+		tft.drawFastVLine(170, 150 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(240, 150 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(310, 150 - 20, 40, ILI9341_CYAN);
 	}
 
 	void Update()
@@ -459,6 +467,41 @@ struct RMode
 			DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage, 275);
 		}
 
+		// ERS Indicator
+		if (energy != packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy)
+		{
+			float percentage = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy / MAX_ENERGY;
+			float width = 320 * percentage;
+
+			uint32 bar_colour;
+			if (percentage > 0.3f)
+				bar_colour = ILI9341_CYAN;
+			else if (percentage > 0.1f)
+				bar_colour = ILI9341_YELLOW;
+			else
+				bar_colour = ILI9341_RED;
+
+			// Trick for drawing continuously updating bar without flickering
+			if (packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy < energy)
+				tft.fillRect(width, 230, 320 - width, 10, ILI9341_BLACK);
+			else
+				tft.fillRect(0, 230, width, 10, bar_colour);
+
+			energy = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy;
+		}
+
+		// ERS MODE
+		if (ers_mode != packet_status.current.m_carStatusData[player_id].m_ersDeployMode || first_packet)
+		{
+			ers_mode = packet_status.current.m_carStatusData[player_id].m_ersDeployMode;
+
+			tft.setTextColor(ers_colour_map[ers_mode], ILI9341_BLACK);
+
+			WriteCentered(240, 220, ers_mode_map[ers_mode], 2);
+
+			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+		}
+
 		// FUEL PREDICTION
 		if (lap_distance != packet_lap.current.m_lapData[player_id].m_lapDistance)
 		{
@@ -496,7 +539,7 @@ struct RMode
 				}
 				str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
 				str_fuel_left += " laps";
-				WriteCentered(240, 120, str_fuel_left, 2);
+				WriteCentered(240, 105, str_fuel_left, 2);
 				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 
 
@@ -517,13 +560,13 @@ private:
 		str_fuel += fuel_remaining;
 		str_fuel += " kg";
 		// Write to display
-		WriteCentered(240, 120, str_fuel, 2);
+		WriteCentered(240, 105, str_fuel, 2);
 	}
 
 	void DisplayWingDMG(int dmg, int pos)
 	{
 		// Wipe previous
-		tft.fillRect(pos - 34, 170 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
+		tft.fillRect(pos - 34, 150 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
 
 		// Set colour
 		if (dmg == 0)
@@ -539,7 +582,7 @@ private:
 		str_dmg += (char)37;
 
 		// Write to display
-		WriteCentered(pos, 170, str_dmg, 2);
+		WriteCentered(pos, 150, str_dmg, 2);
 
 		// Return to previous colour output
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
@@ -566,7 +609,7 @@ private:
 		}
 
 		// Write to display
-		WriteCentered(240, 80, str_mix, 2);
+		WriteCentered(240, 60, str_mix, 2);
 	}
 
 	void DisplayDRS(int drs_on)
@@ -578,7 +621,7 @@ private:
 			tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
 
 		// Write to display
-		WriteCentered(240, GetTextHeight(4), "DRS", 4);
+		WriteCentered(240, GetTextHeight(4) - 10, "DRS", 4);
 
 		// Return to previous colour output
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
@@ -592,7 +635,7 @@ private:
 		str_penalty += "s";
 
 		// Write to display
-		WriteCentered(240, 240 - GetTextHeight(3), str_penalty, 3);
+		WriteCentered(240, 210 - GetTextHeight(2), str_penalty, 2); // y = 240
 	}
 
 	void DisplayTyreTemps(int index, int temperature, int temperature_last)
@@ -600,7 +643,7 @@ private:
 		// If digits change, wipe the area first
 		if (temperature >= 100 && temperature_last < 100 ||
 			temperature < 100 && temperature_last >= 100)
-			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 60, 78, 55, ILI9341_BLACK);
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 50, 78, 45, ILI9341_BLACK);
 
 		// Build string
 		String str_tyre_temp;
@@ -609,7 +652,7 @@ private:
 		str_tyre_temp += "C";
 
 		// Write to display
-		WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 90, str_tyre_temp, 2);
+		WriteCentered(tyre_pos[index][0] + 40, tyre_pos[index][1] + 80, str_tyre_temp, 2);
 	}
 
 	void DisplayTyreWear(int index, int wear, int wear_last)
@@ -777,14 +820,19 @@ private:
 
 	void DisplaySCDelta(float delta)
 	{
+
 		String str_delta;
 
-		tft.setTextColor(ILI9341_WHITE);
-
 		if (delta > 0)
+		{
 			str_delta += "+";
+			tft.setTextColor(ILI9341_WHITE, 0x0725);
+		}
+		else
+			tft.setTextColor(ILI9341_WHITE, ILI9341_RED);
 
-		str_delta += floor(delta * 10.f) / 10.f;
+
+		str_delta += floor(delta * 10.f) / 10.f;;
 		str_delta += "s";
 
 		WriteCentered(240, 25, str_delta, 3);
