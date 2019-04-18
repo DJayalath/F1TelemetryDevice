@@ -109,7 +109,8 @@ enum MODE
 	PRACTICE,
 	QUALI,
 	RACE,
-	SPECTATOR
+	SPECTATOR,
+	SAFETYCAR
 };
 
 // Map given sessionType to mode enumerations
@@ -682,6 +683,171 @@ private:
 };
 SMode* spectator = NULL;
 
+struct SCMode
+{
+	int16_t tyre_pos[4][2] = { {0, 145}, {160, 145}, {0, 50}, {160, 50} };
+
+	// Current value storage
+	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
+	uint16 tyre_temp[4];
+	uint8 fuel_mix;
+	float sc_delta;
+
+	void Init()
+	{
+		tft.fillScreen(0xFF80); // Darker yellow
+		tft.setTextColor(ILI9341_BLACK);
+		if (packet_session.current.m_safetyCarStatus == 1)
+			WriteCentered(160, 120, "Safety Car", 4);
+		else
+		{
+			WriteCentered(160, 100, "Virtual", 4);
+			WriteCentered(160, 140, "Safety Car", 4);
+		}
+		delay(3000);
+		ClearScreen();
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+
+		// Draw boxes for each tyre
+		tft.drawFastVLine(0, 50, 240, ILI9341_CYAN);
+		tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
+		tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
+		tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
+		tft.drawFastHLine(0, 239, 320, ILI9341_CYAN);
+		tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
+	}
+
+	void Update()
+	{
+		// Tyre telemetry
+		for (int i = 0; i < 4; i++)
+		{
+			// TYRE WEAR
+			if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+			{
+				tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
+				DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+			}
+			// TYRE TEMPS
+			if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+			{
+				tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
+				DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+			}
+
+		}
+
+		// Fuel mix
+		if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
+		{
+			fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
+			DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+		}
+
+		// SC Delta
+		if (sc_delta != packet_lap.current.m_lapData[player_id].m_safetyCarDelta || first_packet)
+		{
+			if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta >= 0 && sc_delta < 0)
+				tft.fillRect(160, 0, 160, 49, 0x0725);
+			else if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta < 0 && sc_delta >= 0)
+				tft.fillRect(160, 0, 160, 49, ILI9341_RED);
+
+			sc_delta = packet_lap.current.m_lapData[player_id].m_safetyCarDelta;
+
+			DisplaySCDelta(sc_delta);
+		}
+
+	}
+
+private:
+
+	void DisplaySCDelta(float delta)
+	{
+		String str_delta;
+
+		tft.setTextColor(ILI9341_WHITE);
+
+		if (delta > 0)
+			str_delta += "+";
+
+		str_delta += floor(delta * 10.f) / 10.f;
+		str_delta += "s";
+
+		WriteCentered(240, 25, str_delta, 3);
+
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+	void DisplayTyreTemps(int index, int temperature, int temperature_last)
+	{
+		// If digits change, wipe the area first
+		if (temperature >= 100 && temperature_last < 100 ||
+			temperature < 100 && temperature_last >= 100)
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 33 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
+
+		// Build string
+		String str_tyre_temp;
+		str_tyre_temp += temperature;
+		str_tyre_temp += (char)248;
+		str_tyre_temp += "C";
+
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 80, tyre_pos[index][1] + 33, str_tyre_temp, 3);
+	}
+
+	void DisplayTyreWear(int index, int wear, int wear_last)
+	{
+		// Wipe previous
+		if (wear >= 10 && wear_last < 10 ||
+			wear < 10 && wear_last >= 10)
+			tft.fillRect(tyre_pos[index][0] + 1, tyre_pos[index][1] + 66 - GetTextHeight(3) / 2, 158, GetTextHeight(3), ILI9341_BLACK);
+
+		// Build string
+		String str_tyre_wear;
+		str_tyre_wear += wear;
+		str_tyre_wear += (char)37;
+
+		// Write to display
+		WriteCentered(tyre_pos[index][0] + 80, tyre_pos[index][1] + 66, str_tyre_wear, 3);
+	}
+
+	void DisplayFuelMix(int mix)
+	{
+		// Set colour
+		tft.setTextColor(ILI9341_WHITE);
+
+		// Build string
+		String str_mix;
+		switch (mix)
+		{
+		case 0:
+			str_mix = "Lean Fuel";
+			tft.fillRect(0, 0, 160, 49, ILI9341_MAGENTA);
+			break;
+		case 1:
+			str_mix = "Stnd Fuel";
+			tft.fillRect(0, 0, 160, 49, ILI9341_RED);
+			break;
+		case 2:
+			str_mix = "Rich Fuel";
+			tft.fillRect(0, 0, 160, 49, ILI9341_RED);
+			break;
+		case 3:
+			str_mix = "MAX. Fuel";
+			tft.fillRect(0, 0, 160, 49, ILI9341_MAGENTA);
+			break;
+		}
+
+		// Write to display
+		WriteCentered(80, 25, str_mix, 2);
+
+		// Reset text colours
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+	}
+
+};
+SCMode* safety_car = NULL;
+
 // Auxillary Functions
 
 template<typename A> void ReadPacket(Packet<A> & packet)
@@ -706,6 +872,32 @@ void ClearScreen()
 {
 	tft.fillScreen(ILI9341_BLACK);
 	return;
+}
+
+void DeallocateMode(int mode)
+{
+	// Deallocate memory from mode
+	switch (mode)
+	{
+	case IDLE:
+		delete idle;
+		idle = NULL;
+	case PRACTICE:
+		delete practice;
+		practice = NULL;
+	case QUALI:
+		delete quali;
+		quali = NULL;
+	case RACE:
+		delete race;
+		race = NULL;
+	case SPECTATOR:
+		delete spectator;
+		spectator = NULL;
+	case SAFETYCAR:
+		delete safety_car;
+		safety_car = NULL;
+	}
 }
 
 // SETUP
@@ -839,65 +1031,55 @@ void loop() {
 		}
 
 		// Change mode if session type is changed
-		if (mode_map[packet_session.current.m_sessionType] != current_mode)
+		if (packet_session.current.m_isSpectating)
 		{
-			if (!(packet_session.current.m_isSpectating && current_mode == SPECTATOR))
+			if (current_mode != SPECTATOR)
 			{
-				// Deallocate memory from previous mode
-				switch (current_mode)
-				{
-				case IDLE:
-					delete idle;
-					idle = NULL;
-				case PRACTICE:
-					delete practice;
-					practice = NULL;
-				case QUALI:
-					delete quali;
-					quali = NULL;
-				case RACE:
-					delete race;
-					race = NULL;
-				case SPECTATOR:
-					delete spectator;
-					spectator = NULL;
-				}
-
-				// Change mode
 				first_packet = true;
-				current_mode = mode_map[packet_session.current.m_sessionType];
 				ClearScreen();
+				DeallocateMode(current_mode);
+				current_mode = SPECTATOR;
+				spectator = new SMode();
+				spectator->Init();
+			}
+		}
+		else if (packet_session.current.m_safetyCarStatus > 0)
+		{
+			if (current_mode != SAFETYCAR)
+			{
+				first_packet = true;
+				ClearScreen();
+				DeallocateMode(current_mode);
+				current_mode = SAFETYCAR;
+				safety_car = new SCMode();
+				safety_car->Init();
+			}
+		}
+		else if (mode_map[packet_session.current.m_sessionType] != current_mode)
+		{
+			first_packet = true;
+			DeallocateMode(current_mode);
+			current_mode = mode_map[packet_session.current.m_sessionType];
 
-				if (!packet_session.current.m_isSpectating)
-				{
-
-					switch (current_mode)
-					{
-					case PRACTICE:
-						practice = new PMode();
-						practice->Init();
-						break;
-					case QUALI:
-						quali = new QMode();
-						quali->Init();
-						break;
-					case RACE:
-						race = new RMode();
-						race->Init();
-						break;
-					default:
-						current_mode = IDLE;
-						idle = new IMode();
-						idle->Init();
-						break;
-					}
-				}
-				else
-				{
-					current_mode = SPECTATOR;
-					spectator = new SMode();
-					spectator->Init();
-				}
+			switch (current_mode)
+			{
+			case PRACTICE:
+				practice = new PMode();
+				practice->Init();
+				break;
+			case QUALI:
+				quali = new QMode();
+				quali->Init();
+				break;
+			case RACE:
+				race = new RMode();
+				race->Init();
+				break;
+			default:
+				current_mode = IDLE;
+				idle = new IMode();
+				idle->Init();
+				break;
 			}
 		}
 
@@ -917,6 +1099,9 @@ void loop() {
 			break;
 		case SPECTATOR:
 			spectator->Update();
+			break;
+		case SAFETYCAR:
+			safety_car->Update();
 			break;
 		}
 
