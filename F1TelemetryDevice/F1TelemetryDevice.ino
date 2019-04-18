@@ -465,7 +465,7 @@ struct RMode
 			{
 				fuel_difference[1] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
 				float rate = (fuel_difference[0] - fuel_difference[1]) / update_delta;
-				uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum - 1;
+				uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum + 1;
 				float est_fuel_required = ((float)laps_remaining - lap_pos[1]) * rate;
 				float est_fuel_left = (packet_status.current.m_carStatusData[player_id].m_fuelInTank - est_fuel_required) / rate;
 
@@ -853,6 +853,9 @@ SCMode* safety_car = NULL;
 template<typename A> void ReadPacket(Packet<A> & packet)
 {
 	udp_listener.read((char*)& packet.current, sizeof(A));
+
+	if (!packet.packet_received)
+		packet.packet_received = true;
 };
 
 void WriteCentered(int16_t x, int16_t y, String string, int8 size)
