@@ -163,7 +163,10 @@ struct IMode
 		// Notify connect with internal IP
 		WriteCentered(160, 120 - GetTextHeight(3) * 2, "Idle", 3);
 		WriteCentered(160, 120, "Waiting for data from", 2);
-		WriteCentered(160, 120 + GetTextHeight(3) * 2, WiFi.localIP().toString().c_str(), 3);
+		if (WiFi.isConnected())
+			WriteCentered(160, 120 + GetTextHeight(3) * 2, WiFi.localIP().toString().c_str(), 3);
+		else
+			ESP.restart(); // Restart if connection error
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 	}
 
@@ -412,7 +415,8 @@ struct RMode
 	// CONSTS
 	const uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };	// Tyre position array (RL, RR, FL, FR)
 	const String ers_mode_map[6] = { "  ERS  OFF  ", "  ERS  LOW  ", " ERS MEDIUM ", "  ERS HIGH  ", "ERS OVERTAKE", " ERS HOTLAP " };
-	const uint16 ers_colour_map[6] = { ILI9341_DARKGREY, ILI9341_WHITE, ILI9341_YELLOW, ILI9341_ORANGE, ILI9341_RED, ILI9341_MAGENTA };
+	const String fuel_mode_map[4] = { "LEAN FUEL", "STD. FUEL", "RICH FUEL", "MAX. FUEL" };
+	const uint16 colour_map[6] = { ILI9341_DARKGREY, ILI9341_WHITE, ILI9341_YELLOW, ILI9341_ORANGE, ILI9341_RED, ILI9341_MAGENTA };
 	const float MAX_ENERGY = 4000000.f;
 	const float update_delta = 0.5f;
 
@@ -434,11 +438,11 @@ struct RMode
 		tft.drawFastHLine(0, 229, 160, ILI9341_CYAN);
 
 		// Draw boxes for wing
-		tft.drawFastHLine(170, 150 - 20, 140, ILI9341_CYAN);
-		tft.drawFastHLine(170, 150 + 20, 140, ILI9341_CYAN);
-		tft.drawFastVLine(170, 150 - 20, 40, ILI9341_CYAN);
-		tft.drawFastVLine(240, 150 - 20, 40, ILI9341_CYAN);
-		tft.drawFastVLine(310, 150 - 20, 40, ILI9341_CYAN);
+		tft.drawFastHLine(170, 160 - 20, 140, ILI9341_CYAN);
+		tft.drawFastHLine(170, 160 + 20, 140, ILI9341_CYAN);
+		tft.drawFastVLine(170, 160 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(240, 160 - 20, 40, ILI9341_CYAN);
+		tft.drawFastVLine(310, 160 - 20, 40, ILI9341_CYAN);
 	}
 
 	void Update()
@@ -537,9 +541,9 @@ struct RMode
 			{
 				ers_mode = packet_status.current.m_carStatusData[player_id].m_ersDeployMode;
 
-				tft.setTextColor(ers_colour_map[ers_mode], ILI9341_BLACK);
+				tft.setTextColor(colour_map[ers_mode], ILI9341_BLACK);
 
-				WriteCentered(240, 220, ers_mode_map[ers_mode], 2);
+				WriteCentered(240, 92, ers_mode_map[ers_mode], 2);
 
 				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 			}
@@ -584,7 +588,7 @@ struct RMode
 					}
 					str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
 					str_fuel_left += " laps";
-					WriteCentered(240, 105, str_fuel_left, 2);
+					WriteCentered(240, 115, str_fuel_left, 2);
 					tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 
 
@@ -606,13 +610,13 @@ private:
 		str_fuel += fuel_remaining;
 		str_fuel += " kg";
 		// Write to display
-		WriteCentered(240, 105, str_fuel, 2);
+		WriteCentered(240, 115, str_fuel, 2);
 	}
 
 	void DisplayWingDMG(int dmg, int pos)
 	{
 		// Wipe previous
-		tft.fillRect(pos - 34, 150 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
+		tft.fillRect(pos - 34, 160 - GetTextHeight(2) / 2, 68, GetTextHeight(2), ILI9341_BLACK);
 
 		// Set colour
 		if (dmg == 0)
@@ -628,7 +632,7 @@ private:
 		str_dmg += (char)37;
 
 		// Write to display
-		WriteCentered(pos, 150, str_dmg, 2);
+		WriteCentered(pos, 160, str_dmg, 2);
 
 		// Return to previous colour output
 		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
@@ -636,26 +640,10 @@ private:
 
 	void DisplayFuelMix(int mix)
 	{
-		// Build string
-		String str_mix;
-		switch (mix)
-		{
-		case 0:
-			str_mix = "Lean Fuel";
-			break;
-		case 1:
-			str_mix = "Stnd Fuel";
-			break;
-		case 2:
-			str_mix = "Rich Fuel";
-			break;
-		case 3:
-			str_mix = "MAX. Fuel";
-			break;
-		}
-
 		// Write to display
-		WriteCentered(240, 60, str_mix, 2);
+		tft.setTextColor(colour_map[mix + 1], ILI9341_BLACK);
+		WriteCentered(240, 60, fuel_mode_map[mix], 2);
+		tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
 	}
 
 	void DisplayDRS(int drs_on)
@@ -681,7 +669,7 @@ private:
 		str_penalty += "s";
 
 		// Write to display
-		WriteCentered(240, 210 - GetTextHeight(2), str_penalty, 2); // y = 240
+		WriteCentered(240, 220 - GetTextHeight(2), str_penalty, 2); // y = 240
 	}
 
 	void DisplayTyreTemps(int index, int temperature, int temperature_last)
