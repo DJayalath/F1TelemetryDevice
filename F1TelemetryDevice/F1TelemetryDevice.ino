@@ -23,7 +23,7 @@
 // - Continuous race fuel calc updating
 // - Fix race start fuel = 0
 // - Tyre wear and temp overlap (due to starting null values?)
-// - TEST SC Mode timing overlap
+// - TEST SC Mode timing overlap fix
 
 
 // Graphics
@@ -46,6 +46,7 @@
 
 // Misc.
 #include <cmath>
+#include <limits>
 
 // UDP Data Structures
 #include "DataStructures.hpp"
@@ -62,32 +63,7 @@ IPAddress AP_IP(10, 0, 1, 1);
 WiFiUDP udp_listener;
 WiFiServer server(80);
 
-template<typename T>
-struct Packet
-{
-	T current;
-	bool packet_received = false;
-};
-Packet <PacketMotionData> packet_motion;
-Packet <PacketSessionData> packet_session;
-Packet <PacketLapData> packet_lap;
-Packet <PacketEventData> packet_event;
-Packet <PacketParticipantsData> packet_participants;
-Packet <PacketCarSetupData> packet_setups;
-Packet <PacketCarTelemetryData> packet_telemetry;
-Packet <PacketCarStatusData> packet_status;
-
-// Prototypes
-template<typename T> void ReadPacket(Packet<T>& packet);
-void WriteCentered(int16_t x, int16_t y, String string, int8 size);
-int16_t GetTextHeight(int8 size);
-void ClearScreen();
-
-// Independantly store if this is the first packet received
-// and the player's car index in each array
-bool first_packet = true;
-int player_id = 0;
-
+// Packet Information
 enum PACKET_SIZE // in bytes
 {
 	SIZE_HEADER = 21,
@@ -110,8 +86,44 @@ enum PACKET_TYPE // used to identify header's packetID
 	TYPE_PARTICIPANTS,
 	TYPE_SETUPS,
 	TYPE_TELEMETRY,
-	TYPE_STATUS
+	TYPE_STATUS,
+	NUM_PACKETS
 };
+
+struct AbstractPacket
+{
+	bool packet_received = false;
+};
+
+template<typename T>
+struct Packet : AbstractPacket
+{
+	T current;
+};
+
+Packet <PacketMotionData> packet_motion;
+Packet <PacketSessionData> packet_session;
+Packet <PacketLapData> packet_lap;
+Packet <PacketEventData> packet_event;
+Packet <PacketParticipantsData> packet_participants;
+Packet <PacketCarSetupData> packet_setups;
+Packet <PacketCarTelemetryData> packet_telemetry;
+Packet <PacketCarStatusData> packet_status;
+
+// Load packets into array if necessary to iterate
+AbstractPacket* arr_packets[NUM_PACKETS] = { &packet_motion, &packet_session, &packet_lap,
+&packet_event, &packet_participants, &packet_setups, &packet_telemetry, &packet_status };
+
+// Prototypes
+template<typename T> void ReadPacket(Packet<T>& packet);
+void WriteCentered(int16_t x, int16_t y, String string, int8 size);
+int16_t GetTextHeight(int8 size);
+void ClearScreen();
+
+// Independantly store if this is the first packet received
+// and the player's car index in each array
+bool first_packet = true;
+int player_id = 0;
 
 // For the Esp connection of touch
 #define TFT_DC 2
@@ -182,11 +194,11 @@ struct QMode
 	int16_t tyre_pos[4][2] = { {0, 145}, {160, 145}, {0, 50}, {160, 50} };
 
 	// Current value storage
-	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
-	uint16 tyre_temp[4] = { 90, 90, 90, 90 };
-	uint8 fuel_mix;
-	uint16 time_left;
-	uint8 drs;
+	uint8 tyre_wear[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	uint16 tyre_temp[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+	uint8 fuel_mix = 0xFF;
+	uint16 time_left = 0xFFFF;
+	uint8 drs = 0xFF;
 
 	void Init()
 	{
@@ -212,55 +224,71 @@ struct QMode
 		for (int i = 0; i < 4; i++)
 		{
 			// TYRE WEAR
-			if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+			if (packet_status.packet_received)
 			{
-				tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
-				DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+				if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i])
+				{
+					DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+					tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
+				}
 			}
 			// TYRE TEMPS
-			if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+			if (packet_telemetry.packet_received)
 			{
-				tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
-				DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+				if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i])
+				{
+					DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+					tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
+				}
 			}
 
 		}
 
 		// Fuel mix
-		if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
+		if (packet_status.packet_received)
 		{
-			fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
-			DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+			if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix)
+			{
+				fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
+				DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+			}
 		}
 
 		// Session timer
-		if (time_left != packet_session.current.m_sessionTimeLeft || first_packet)
+		if (packet_session.packet_received)
 		{
-			time_left = packet_session.current.m_sessionTimeLeft;
-			DisplayTimeRemaining(packet_session.current.m_sessionTimeLeft);
+			if (time_left != packet_session.current.m_sessionTimeLeft)
+			{
+				time_left = packet_session.current.m_sessionTimeLeft;
+				DisplayTimeRemaining(packet_session.current.m_sessionTimeLeft);
+			}
 		}
 
-		if (drs != packet_telemetry.current.m_carTelemetryData[player_id].m_drs)
+		// DRS
+		if (packet_telemetry.packet_received)
 		{
-			drs = packet_telemetry.current.m_carTelemetryData[player_id].m_drs;
+			if (drs != packet_telemetry.current.m_carTelemetryData[player_id].m_drs)
+			{
+				drs = packet_telemetry.current.m_carTelemetryData[player_id].m_drs;
 
-			if (drs)
-			{
-				tft.drawFastVLine(0, 50, 240, ILI9341_GREEN);
-				tft.drawFastVLine(160, 50, 240, ILI9341_GREEN);
-				tft.drawFastVLine(319, 50, 240, ILI9341_GREEN);
-				tft.drawFastHLine(0, 50, 320, ILI9341_GREEN);
-				tft.drawFastHLine(0, 239, 320, ILI9341_GREEN);
-				tft.drawFastHLine(0, 145, 320, ILI9341_GREEN);
-			}
-			else
-			{
-				tft.drawFastVLine(0, 50, 240, ILI9341_CYAN);
-				tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
-				tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
-				tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
-				tft.drawFastHLine(0, 239, 320, ILI9341_CYAN);
-				tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
+				if (drs)
+				{
+					tft.drawFastVLine(0, 50, 240, ILI9341_GREEN);
+					tft.drawFastVLine(160, 50, 240, ILI9341_GREEN);
+					tft.drawFastVLine(319, 50, 240, ILI9341_GREEN);
+					tft.drawFastHLine(0, 50, 320, ILI9341_GREEN);
+					tft.drawFastHLine(0, 239, 320, ILI9341_GREEN);
+					tft.drawFastHLine(0, 145, 320, ILI9341_GREEN);
+				}
+				else
+				{
+					tft.drawFastVLine(0, 50, 240, ILI9341_CYAN);
+					tft.drawFastVLine(160, 50, 240, ILI9341_CYAN);
+					tft.drawFastVLine(319, 50, 240, ILI9341_CYAN);
+					tft.drawFastHLine(0, 50, 320, ILI9341_CYAN);
+					tft.drawFastHLine(0, 239, 320, ILI9341_CYAN);
+					tft.drawFastHLine(0, 145, 320, ILI9341_CYAN);
+				}
 			}
 		}
 	}
@@ -366,27 +394,27 @@ QMode* quali = NULL;
 
 struct RMode
 {
-	// Current stored variables
-	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
-	uint16 tyre_temp[4] = { 90, 90, 90, 90 };
-	uint8 fuel_mix = 0;
-	uint8 penalties = 0;
-	uint8 drs = 0;
-	uint8 wing_dmg[2] = { 0, 0 }; // 0 = LW, 1 = RW
-	float lap_distance = 0.f;
-	uint16 track_length = 0;
-	float fuel_difference[2] = { -1, -1 };
-	uint8 lap_num[2] = { 1, 1 };
-	float lap_pos[2] = { 0.f, 0.f };
-	const float update_delta = 0.5f;
-	float energy = 0.f;
-	const float MAX_ENERGY = 4000000.f;
-	uint8 ers_mode = 0;
-	String ers_mode_map[6] = { "  ERS  OFF  ", "  ERS  LOW  ", " ERS MEDIUM ", "  ERS HIGH  ", "ERS OVERTAKE", " ERS HOTLAP "};
-	uint32 ers_colour_map[6] = { ILI9341_DARKGREY, ILI9341_WHITE, ILI9341_YELLOW, ILI9341_ORANGE, ILI9341_RED, ILI9341_MAGENTA };
+	// VARS (max value to indicated unassigned)
+	uint8 tyre_wear[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	uint16 tyre_temp[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+	uint8 fuel_mix = 0xFF;
+	uint8 penalties = 0xFF;
+	uint8 drs = 0xFF;
+	uint8 wing_dmg[2] = { 0xFF, 0xFF }; // 0 = LW, 1 = RW
+	float lap_distance = std::numeric_limits<float>::max();
+	uint16 track_length = 0xFFFF;
+	float fuel_difference[2] = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+	uint8 lap_num[2] = { 0xFF, 0xFF };
+	float lap_pos[2] = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+	float energy = std::numeric_limits<float>::max();
+	uint8 ers_mode = 0xFF;
 
-	// Tyre position array (RL, RR, FL, FR)
-	uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };
+	// CONSTS
+	const uint16 tyre_pos[4][2] = { {0, 120 }, {80, 120}, {0, 0}, {80, 0} };	// Tyre position array (RL, RR, FL, FR)
+	const String ers_mode_map[6] = { "  ERS  OFF  ", "  ERS  LOW  ", " ERS MEDIUM ", "  ERS HIGH  ", "ERS OVERTAKE", " ERS HOTLAP " };
+	const uint16 ers_colour_map[6] = { ILI9341_DARKGREY, ILI9341_WHITE, ILI9341_YELLOW, ILI9341_ORANGE, ILI9341_RED, ILI9341_MAGENTA };
+	const float MAX_ENERGY = 4000000.f;
+	const float update_delta = 0.5f;
 
 	void Init()
 	{
@@ -419,133 +447,151 @@ struct RMode
 		for (int i = 0; i < 4; i++)
 		{
 			// TYRE WEAR
-			if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+			if (packet_status.packet_received)
 			{
-				tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
-				DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+				if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i])
+				{
+					DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+					tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
+				}
 			}
 			// TYRE TEMPS
-			if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+			if (packet_telemetry.packet_received)
 			{
-				tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
-				DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+				if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i])
+				{
+					DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+					tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
+				}
 			}
 		}
 
 		// CUMULATIVE PLAYER PENALTY TIME
-		if (penalties != packet_lap.current.m_lapData[player_id].m_penalties || first_packet)
+		if (packet_lap.packet_received)
 		{
-			penalties = packet_lap.current.m_lapData[player_id].m_penalties;
-			DisplayPenalties(packet_lap.current.m_lapData[player_id].m_penalties);
+			if (penalties != packet_lap.current.m_lapData[player_id].m_penalties)
+			{
+				penalties = packet_lap.current.m_lapData[player_id].m_penalties;
+				DisplayPenalties(packet_lap.current.m_lapData[player_id].m_penalties);
+			}
 		}
 
 		// DRS INDICATOR
-		if (drs != packet_telemetry.current.m_carTelemetryData[player_id].m_drs || first_packet)
+		if (packet_telemetry.packet_received)
 		{
-			drs = packet_telemetry.current.m_carTelemetryData[player_id].m_drs;
-			DisplayDRS(packet_telemetry.current.m_carTelemetryData[player_id].m_drs);
+			if (drs != packet_telemetry.current.m_carTelemetryData[player_id].m_drs)
+			{
+				drs = packet_telemetry.current.m_carTelemetryData[player_id].m_drs;
+				DisplayDRS(packet_telemetry.current.m_carTelemetryData[player_id].m_drs);
+			}
 		}
 
-		// FUEL MIX INDICATOR
-		if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
+		if (packet_status.packet_received)
 		{
-			fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
-			DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
-		}
+			// FUEL MIX INDICATOR
+			if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix)
+			{
+				fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
+				DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+			}
 
-		// LEFT WING DMG
-		if (wing_dmg[0] != packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage || first_packet)
-		{
-			wing_dmg[0] = packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage;
-			DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage, 205);
-		}
+			// LEFT WING DMG
+			if (wing_dmg[0] != packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage)
+			{
+				wing_dmg[0] = packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage;
+				DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontLeftWingDamage, 205);
+			}
 
-		// RIGHT WING DMG
-		if (wing_dmg[1] != packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage || first_packet)
-		{
-			wing_dmg[1] = packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage;
-			DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage, 275);
-		}
+			// RIGHT WING DMG
+			if (wing_dmg[1] != packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage)
+			{
+				wing_dmg[1] = packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage;
+				DisplayWingDMG(packet_status.current.m_carStatusData[player_id].m_frontRightWingDamage, 275);
+			}
 
-		// ERS Indicator
-		if (energy != packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy)
-		{
-			float percentage = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy / MAX_ENERGY;
-			float width = 320 * percentage;
+			// ERS Indicator
+			if (energy != packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy)
+			{
+				float percentage = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy / MAX_ENERGY;
+				float width = 320 * percentage;
 
-			uint32 bar_colour;
-			if (percentage > 0.3f)
-				bar_colour = ILI9341_CYAN;
-			else if (percentage > 0.1f)
-				bar_colour = ILI9341_YELLOW;
-			else
-				bar_colour = ILI9341_RED;
+				uint32 bar_colour;
+				if (percentage > 0.3f)
+					bar_colour = ILI9341_CYAN;
+				else if (percentage > 0.1f)
+					bar_colour = ILI9341_YELLOW;
+				else
+					bar_colour = ILI9341_RED;
 
-			// Trick for drawing continuously updating bar without flickering
-			if (packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy < energy)
-				tft.fillRect(width, 230, 320 - width, 10, ILI9341_BLACK);
-			else
-				tft.fillRect(0, 230, width, 10, bar_colour);
+				// Trick for drawing continuously updating bar without flickering
+				if (packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy < energy)
+					tft.fillRect(width, 230, 320 - width, 10, ILI9341_BLACK);
+				else
+					tft.fillRect(0, 230, width, 10, bar_colour);
 
-			energy = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy;
-		}
+				energy = packet_status.current.m_carStatusData[player_id].m_ersStoreEnergy;
+			}
 
-		// ERS MODE
-		if (ers_mode != packet_status.current.m_carStatusData[player_id].m_ersDeployMode || first_packet)
-		{
-			ers_mode = packet_status.current.m_carStatusData[player_id].m_ersDeployMode;
+			// ERS MODE
+			if (ers_mode != packet_status.current.m_carStatusData[player_id].m_ersDeployMode)
+			{
+				ers_mode = packet_status.current.m_carStatusData[player_id].m_ersDeployMode;
 
-			tft.setTextColor(ers_colour_map[ers_mode], ILI9341_BLACK);
+				tft.setTextColor(ers_colour_map[ers_mode], ILI9341_BLACK);
 
-			WriteCentered(240, 220, ers_mode_map[ers_mode], 2);
+				WriteCentered(240, 220, ers_mode_map[ers_mode], 2);
 
-			tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+			}
 		}
 
 		// FUEL PREDICTION
-		if (lap_distance != packet_lap.current.m_lapData[player_id].m_lapDistance)
+		if (packet_status.packet_received && packet_lap.packet_received && packet_session.packet_received)
 		{
-			lap_distance = packet_lap.current.m_lapData[player_id].m_lapDistance;
-			if (fuel_difference[0] == -1)
+			if (lap_distance != packet_lap.current.m_lapData[player_id].m_lapDistance)
 			{
-				track_length = packet_session.current.m_trackLength;
-				fuel_difference[0] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
-				lap_num[0] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
-				lap_pos[0] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
-				DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
-			}
-
-			lap_num[1] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
-			lap_pos[1] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
-
-			if (((float)lap_num[1] + lap_pos[1]) - ((float)lap_num[0] + lap_pos[0]) > update_delta)
-			{
-				fuel_difference[1] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
-				float rate = (fuel_difference[0] - fuel_difference[1]) / update_delta;
-				uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum + 1;
-				float est_fuel_required = ((float)laps_remaining - lap_pos[1]) * rate;
-				float est_fuel_left = (packet_status.current.m_carStatusData[player_id].m_fuelInTank - est_fuel_required) / rate;
-
-				// Output
-				String str_fuel_left;
-				if (est_fuel_left > 0)
+				lap_distance = packet_lap.current.m_lapData[player_id].m_lapDistance;
+				if (fuel_difference[0] == std::numeric_limits<float>::max())
 				{
-					str_fuel_left += "+";
-					tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+					track_length = packet_session.current.m_trackLength;
+					fuel_difference[0] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
+					lap_num[0] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
+					lap_pos[0] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
+					DisplayFuelRemaining(packet_status.current.m_carStatusData[player_id].m_fuelInTank);
 				}
-				else
+
+				lap_num[1] = packet_lap.current.m_lapData[player_id].m_currentLapNum;
+				lap_pos[1] = packet_lap.current.m_lapData[player_id].m_lapDistance / (float)track_length;
+
+				if (((float)lap_num[1] + lap_pos[1]) - ((float)lap_num[0] + lap_pos[0]) > update_delta)
 				{
-					tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+					fuel_difference[1] = packet_status.current.m_carStatusData[player_id].m_fuelInTank;
+					float rate = (fuel_difference[0] - fuel_difference[1]) / update_delta;
+					uint8 laps_remaining = packet_session.current.m_totalLaps - packet_lap.current.m_lapData[player_id].m_currentLapNum + 1;
+					float est_fuel_required = ((float)laps_remaining - lap_pos[1]) * rate;
+					float est_fuel_left = (packet_status.current.m_carStatusData[player_id].m_fuelInTank - est_fuel_required) / rate;
+
+					// Output
+					String str_fuel_left;
+					if (est_fuel_left > 0)
+					{
+						str_fuel_left += "+";
+						tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+					}
+					else
+					{
+						tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+					}
+					str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
+					str_fuel_left += " laps";
+					WriteCentered(240, 105, str_fuel_left, 2);
+					tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+
+
+					fuel_difference[0] = fuel_difference[1];
+					lap_num[0] = lap_num[1];
+					lap_pos[0] = lap_pos[1];
 				}
-				str_fuel_left += floor(est_fuel_left * 10.f) / 10.f;
-				str_fuel_left += " laps";
-				WriteCentered(240, 105, str_fuel_left, 2);
-				tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-
-
-				fuel_difference[0] = fuel_difference[1];
-				lap_num[0] = lap_num[1];
-				lap_pos[0] = lap_pos[1];
 			}
 		}
 	}
@@ -675,8 +721,8 @@ RMode* race = NULL;
 struct SMode
 {
 	// Spectating car index
-	uint8 spect_index;
-	float best_lap_time;
+	uint8 spect_index = 0xFF;
+	float best_lap_time = std::numeric_limits<float>::max();
 
 	void Init()
 	{
@@ -690,20 +736,26 @@ struct SMode
 
 	void Update()
 	{
-		if (spect_index != packet_session.current.m_spectatorCarIndex || first_packet)
+		if (packet_session.packet_received)
 		{
-			tft.fillRect(0, 0, 320, 50, ILI9341_BLACK);
-			spect_index = packet_session.current.m_spectatorCarIndex;
-			String str_name;
-			str_name += packet_participants.current.m_participants[spect_index].m_name;
-			WriteCentered(160, 25, str_name, 3);
-			DisplayBestTime(packet_lap.current.m_lapData[spect_index].m_bestLapTime);
+			if (spect_index != packet_session.current.m_spectatorCarIndex)
+			{
+				tft.fillRect(0, 0, 320, 50, ILI9341_BLACK);
+				spect_index = packet_session.current.m_spectatorCarIndex;
+				String str_name;
+				str_name += packet_participants.current.m_participants[spect_index].m_name;
+				WriteCentered(160, 25, str_name, 3);
+				DisplayBestTime(packet_lap.current.m_lapData[spect_index].m_bestLapTime);
+			}
 		}
 
-		if (best_lap_time != packet_lap.current.m_lapData[spect_index].m_bestLapTime || first_packet)
+		if (packet_lap.packet_received)
 		{
-			best_lap_time = packet_lap.current.m_lapData[spect_index].m_bestLapTime;
-			DisplayBestTime(packet_lap.current.m_lapData[spect_index].m_bestLapTime);
+			if (best_lap_time != packet_lap.current.m_lapData[spect_index].m_bestLapTime)
+			{
+				best_lap_time = packet_lap.current.m_lapData[spect_index].m_bestLapTime;
+				DisplayBestTime(packet_lap.current.m_lapData[spect_index].m_bestLapTime);
+			}
 		}
 	}
 
@@ -745,10 +797,10 @@ struct SCMode
 	int16_t tyre_pos[4][2] = { {0, 145}, {160, 145}, {0, 50}, {160, 50} };
 
 	// Current value storage
-	uint8 tyre_wear[4] = { 0, 0, 0, 0 };
-	uint16 tyre_temp[4];
-	uint8 fuel_mix;
-	float sc_delta;
+	uint8 tyre_wear[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	uint16 tyre_temp[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+	uint8 fuel_mix = 0xFF;
+	float sc_delta = std::numeric_limits<float>::max();
 
 	void Init()
 	{
@@ -780,38 +832,50 @@ struct SCMode
 		for (int i = 0; i < 4; i++)
 		{
 			// TYRE WEAR
-			if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i] || first_packet)
+			if (packet_status.packet_received)
 			{
-				tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
-				DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+				if (tyre_wear[i] != packet_status.current.m_carStatusData[player_id].m_tyresWear[i])
+				{
+					DisplayTyreWear(i, packet_status.current.m_carStatusData[player_id].m_tyresWear[i], tyre_wear[i]);
+					tyre_wear[i] = packet_status.current.m_carStatusData[player_id].m_tyresWear[i];
+				}
 			}
 			// TYRE TEMPS
-			if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i] || first_packet)
+			if (packet_telemetry.packet_received)
 			{
-				tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
-				DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+				if (tyre_temp[i] != packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i])
+				{
+					DisplayTyreTemps(i, packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i], tyre_temp[i]);
+					tyre_temp[i] = packet_telemetry.current.m_carTelemetryData[player_id].m_tyresInnerTemperature[i];
+				}
 			}
 
 		}
 
 		// Fuel mix
-		if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix || first_packet)
+		if (packet_status.packet_received)
 		{
-			fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
-			DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+			if (fuel_mix != packet_status.current.m_carStatusData[player_id].m_fuelMix)
+			{
+				fuel_mix = packet_status.current.m_carStatusData[player_id].m_fuelMix;
+				DisplayFuelMix(packet_status.current.m_carStatusData[player_id].m_fuelMix);
+			}
 		}
 
 		// SC Delta
-		if (sc_delta != packet_lap.current.m_lapData[player_id].m_safetyCarDelta || first_packet)
+		if (packet_lap.packet_received)
 		{
-			if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta >= 0 && sc_delta < 0)
-				tft.fillRect(160, 0, 160, 49, 0x0725);
-			else if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta < 0 && sc_delta >= 0)
-				tft.fillRect(160, 0, 160, 49, ILI9341_RED);
+			if (sc_delta != packet_lap.current.m_lapData[player_id].m_safetyCarDelta)
+			{
+				if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta >= 0 && sc_delta < 0)
+					tft.fillRect(160, 0, 160, 49, 0x0725);
+				else if (packet_lap.current.m_lapData[player_id].m_safetyCarDelta < 0 && sc_delta >= 0)
+					tft.fillRect(160, 0, 160, 49, ILI9341_RED);
 
-			sc_delta = packet_lap.current.m_lapData[player_id].m_safetyCarDelta;
+				sc_delta = packet_lap.current.m_lapData[player_id].m_safetyCarDelta;
 
-			DisplaySCDelta(sc_delta);
+				DisplaySCDelta(sc_delta);
+			}
 		}
 
 	}
@@ -963,6 +1027,9 @@ void DeallocateMode(int mode)
 		delete safety_car;
 		safety_car = NULL;
 	}
+
+	for (int i = 0; i < NUM_PACKETS; i++)
+		arr_packets[i]->packet_received = false;
 }
 
 // SETUP
@@ -1061,9 +1128,11 @@ void loop() {
 		case SIZE_MOTION:
 			ReadPacket(packet_motion);
 			player_id = packet_motion.current.m_header.m_playerCarIndex;
+			arr_packets[TYPE_MOTION]->packet_received = true;
 			break;
 		case SIZE_SESSION:
 			ReadPacket(packet_session);
+			arr_packets[TYPE_SESSION]->packet_received = true;
 			break;
 		case SIZE_LAP:
 			char incoming_lap[SIZE_LAP];
@@ -1073,23 +1142,29 @@ void loop() {
 			if (temp.m_header.m_packetId != 2)
 			{
 				memcpy(&packet_setups.current, incoming_lap, SIZE_SETUPS);
+				arr_packets[TYPE_SETUPS]->packet_received = true;
 			}
 			else
 			{
 				packet_lap.current = temp;
+				arr_packets[TYPE_LAP]->packet_received = true;
 			}
 			break;
 		case SIZE_EVENT:
 			ReadPacket(packet_event);
+			arr_packets[TYPE_EVENT]->packet_received = true;
 			break;
 		case SIZE_PARTICIPANTS:
 			ReadPacket(packet_participants);
+			arr_packets[TYPE_PARTICIPANTS]->packet_received = true;
 			break;
 		case SIZE_TELEMETRY:
 			ReadPacket(packet_telemetry);
+			arr_packets[TYPE_TELEMETRY]->packet_received = true;
 			break;
 		case SIZE_STATUS:
 			ReadPacket(packet_status);
+			arr_packets[TYPE_STATUS]->packet_received = true;
 			break;
 		default:
 			break;
