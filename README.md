@@ -32,4 +32,6 @@ With the feasibility considerations made, I knew exactly what parts I'd need for
 -    Voltage Regulator (for 5v supply to D1 Mini)
 -    SPST Toggle Switch
 
-Additionally, the next challenge was connecting all of this together in a permanent way. The best option was a custom printed circuit board. So, I set about designing a compact PCB that could fit everything but the battery shield under the space encompassed by the display.
+Additionally, the next challenge was connecting all of this together in a permanent way. The best option was a custom printed circuit board. So, I designed a compact PCB that could fit everything but the battery shield under the space encompassed by the display.
+
+The final consideration that needed to be made was how it would be mounted to the wheel. The G29 comes with a cap that secures the steering wheel in place using six hex screws. I thought this would be a good position to mount a thick, rectangular plate which could hold the PCB, display and battery shield. I first designed a replacement cap which could mount a plate above it using four standard M3 self-tapping screws. However, this solution couldn't provide ample room to reach buttons on the wheel and so I had to give in to mounting the display behind the wheel as shown.
